@@ -1,0 +1,114 @@
+:root {
+  color-scheme: light dark;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  background: light-dark(#ffffff, #111111);
+}
+
+* { box-sizing: border-box; }
+
+button, a { -webkit-tap-highlight-color: transparent; }
+
+.mono-label {
+  font-family: "Space Mono", monospace;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.nav-scroll { scrollbar-width: none; }
+.nav-scroll::-webkit-scrollbar { display: none; }
+
+.sidebar {
+  background: light-dark(#f1f3f5, #181818);
+  border-right-color: light-dark(#e9ecef, #2b2b2b);
+}
+
+.admin-shell .mantine-AppShell-main {
+  background: light-dark(#ffffff, #111111);
+}
+
+.mobile-nav-button {
+  position: fixed;
+  top: 16px;
+  left: 16px;
+  z-index: 100;
+}
+
+.nav-item {
+  position: relative;
+  display: block;
+  width: 100%;
+  padding: 9px 12px;
+  border-radius: 9px;
+  color: var(--mantine-color-dimmed);
+  transition: background 120ms ease, color 120ms ease;
+}
+
+.nav-item:hover, .nav-item[data-active] {
+  background: light-dark(#e4e8ff, rgba(80, 109, 255, 0.16));
+  color: light-dark(var(--mantine-color-brand-7), var(--mantine-color-brand-2));
+}
+
+.nav-active-mark {
+  position: absolute;
+  left: -13px;
+  top: 9px;
+  bottom: 9px;
+  width: 3px;
+  border-radius: 0 4px 4px 0;
+  background: var(--mantine-color-brand-5);
+}
+
+.mobile-drawer { min-height: 100vh; background: light-dark(#f1f3f5, #181818); }
+
+.player-view {
+  min-height: 100vh;
+  outline: none;
+  overflow: hidden;
+  position: relative;
+}
+
+.player-art {
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(circle at 72% 32%, rgba(80, 109, 255, 0.35) 0 12%, transparent 12.5%),
+    linear-gradient(135deg, rgba(255,255,255,.34) 0 32%, transparent 32.5%),
+    linear-gradient(135deg, #d8defd 0 55%, #bac5fa 55% 75%, #f5dfbd 75%);
+}
+
+.player-copy {
+  position: absolute;
+  left: clamp(28px, 9vw, 150px);
+  bottom: clamp(44px, 12vh, 150px);
+  z-index: 1;
+}
+
+.player-copy h1 { font-size: clamp(2.8rem, 8vw, 8rem); line-height: .98; letter-spacing: -.07em; }
+
+@media (max-width: 48em) {
+  .admin-shell .mantine-AppShell-main { padding-top: 76px; }
+  .player-copy h1 { font-size: clamp(2.6rem, 13vw, 5rem); }
+}
+
+.media-thumb {
+  aspect-ratio: 16 / 9;
+  border-radius: 10px;
+  position: relative;
+  overflow: hidden;
+}
+
+.media-thumb::after {
+  content: "";
+  position: absolute;
+  inset: 20% -10% -35%;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.32);
+  transform: rotate(-12deg);
+}
