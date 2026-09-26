@@ -1,17 +1,18 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import postgres from "postgres";
-import { migrate } from "drizzle-orm/postgres-js/migrator";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { eq } from "drizzle-orm";
+import { migrate } from "drizzle-orm/postgres-js/migrator";
+import postgres from "postgres";
 import { createApp } from "../../apps/api/src/app";
 import { createLocalAuth } from "../../apps/api/src/auth/localAuth";
 import { createDatabase } from "../../apps/api/src/db/client";
 import { invitations, organizations } from "../../apps/api/src/db/schema";
 import { createLocalStorage } from "../../apps/api/src/media/localStorage";
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { testDatabaseAdminUrl } from "../config";
 
-const adminUrl = process.env.TEST_DATABASE_ADMIN_URL;
+const adminUrl = testDatabaseAdminUrl;
 const databaseName = `pixelpushr_test_${crypto.randomUUID().replaceAll("-", "")}`;
 let admin: ReturnType<typeof postgres>;
 let connection: ReturnType<typeof createDatabase>;
@@ -21,11 +22,11 @@ let readyImageId: string;
 let readyPlaylistId: string;
 const sentInvitations: { email: string; url: string }[] = [];
 
-describe.skipIf(!adminUrl)("first-run organization setup", () => {
+describe("first-run organization setup", () => {
   beforeAll(async () => {
-    admin = postgres(adminUrl!, { max: 1 });
+    admin = postgres(adminUrl, { max: 1 });
     await admin`CREATE DATABASE ${admin(databaseName)}`;
-    const url = new URL(adminUrl!);
+    const url = new URL(adminUrl);
     url.pathname = `/${databaseName}`;
     connection = createDatabase(url.toString());
     await migrate(connection.db, {

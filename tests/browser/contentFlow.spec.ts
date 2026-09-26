@@ -1,21 +1,22 @@
+import { type ChildProcess, spawn } from "node:child_process";
 import { expect, test } from "@playwright/test";
-import { spawn, type ChildProcess } from "node:child_process";
-import postgres from "postgres";
 import { migrate } from "drizzle-orm/postgres-js/migrator";
+import postgres from "postgres";
 import { createDatabase } from "../../apps/api/src/db/client";
 import { mediaAssets } from "../../apps/api/src/db/schema";
 import { createS3Storage } from "../../apps/api/src/media/storage";
+import {
+  browserTestApiPort,
+  testDatabaseAdminUrl,
+  testS3Endpoint,
+} from "../config";
 
-test.skip(
-  !process.env.TEST_DATABASE_ADMIN_URL || !process.env.TEST_S3_ENDPOINT,
-  "Run with local PostgreSQL and Floci",
-);
 test.describe.configure({ mode: "serial" });
 
-const adminUrl = process.env.TEST_DATABASE_ADMIN_URL!;
-const s3Endpoint = process.env.TEST_S3_ENDPOINT!;
+const adminUrl = testDatabaseAdminUrl;
+const s3Endpoint = testS3Endpoint;
 const databaseName = `pixelpushr_browser_${crypto.randomUUID().replaceAll("-", "")}`;
-const apiPort = 43722;
+const apiPort = browserTestApiPort;
 const secret = "browser-test-secret-longer-than-thirty-two-characters";
 let admin: ReturnType<typeof postgres>;
 let connection: ReturnType<typeof createDatabase>;

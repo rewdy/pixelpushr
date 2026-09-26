@@ -1,15 +1,11 @@
 import { expect, test } from "@playwright/test";
 import { createS3Storage } from "../../apps/api/src/media/storage";
-
-test.skip(
-  !process.env.TEST_S3_ENDPOINT,
-  "Run with Floci to check browser CORS",
-);
+import { testS3Endpoint } from "../config";
 
 test("browser can upload media to Floci using a presigned URL", async ({
   page,
 }) => {
-  const endpoint = process.env.TEST_S3_ENDPOINT!;
+  const endpoint = testS3Endpoint;
   const storage = createS3Storage({
     region: "us-east-1",
     bucket: "pixelpushr-media",

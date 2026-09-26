@@ -18,7 +18,7 @@ Read [README.md](README.md) for setup, then [docs/architecture.md](docs/architec
 3. `bun run --filter '@pixelpushr/api' db:migrate` and `bun run --filter '@pixelpushr/api' storage:init`.
 4. `bun run dev`; web is `http://127.0.0.1:5173`, API health is `http://127.0.0.1:3000/health`, Mailpit is `http://127.0.0.1:8025`.
 
-Use `bun run typecheck`, `bun run build`, and `bun run test:unit` for quick verification. Integration tests require `TEST_DATABASE_ADMIN_URL=postgres://pixelpushr:pixelpushr@127.0.0.1:54329/postgres`; add `TEST_S3_ENDPOINT=http://127.0.0.1:4566` to exercise Floci. Browser tests additionally need `VITE_API_PROXY_TARGET=http://127.0.0.1:43722` for the real end-to-end flow. Run those as `bun run test:integration` and `bun run test:browser` with the environment variables set. Tests create isolated databases and the browser suite uses Playwright Chromium. Do not run `bun test` indiscriminately over browser specs.
+Use `bun run check`, `bun run typecheck`, `bun run build`, and `bun run test:unit` for quick verification. With Docker services running and `storage:init` completed, `bun run test:integration` and `bun run test:browser` run the full suites without manually setting environment variables. Local test defaults in `tests/config.ts` match Compose; PostgreSQL and Floci endpoints can be overridden for nonstandard test environments. Playwright supplies the API proxy target, starts the web server, and uses Chromium. Tests create isolated databases. Do not run `bun test` indiscriminately over browser specs. The full command sequence is in [README.md](README.md#full-local-check).
 
 ## Implementation guardrails
 
