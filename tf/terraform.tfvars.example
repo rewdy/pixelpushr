@@ -1,0 +1,7 @@
+region                     = "us-east-1"
+environment                = "dev"
+domain_name                = "signage.example.com"
+route53_zone_id            = "Z0123456789EXAMPLE"
+cloudfront_certificate_arn = "arn:aws:acm:us-east-1:123456789012:certificate/example"
+mail_from                  = "invites@example.com"
+# vpc_cidr                 = "10.84.0.0/16"

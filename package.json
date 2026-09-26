@@ -1,0 +1,26 @@
+{
+  "name": "pixelpushr",
+  "private": true,
+  "type": "module",
+  "workspaces": ["apps/*", "packages/*"],
+  "scripts": {
+    "dev": "bun run --filter '*' dev",
+    "dev:api": "bun run --filter '@pixelpushr/api' dev",
+    "dev:web": "bun run --filter '@pixelpushr/web' dev",
+    "build": "bun run --filter '@pixelpushr/contracts' build && bun run --filter '@pixelpushr/api' build && bun run --filter '@pixelpushr/web' build",
+    "typecheck": "bun run --filter '@pixelpushr/contracts' typecheck && bun run --filter '@pixelpushr/api' typecheck && bun run --filter '@pixelpushr/web' typecheck",
+    "test": "bun test",
+    "test:unit": "bun test tests/unit",
+    "test:integration": "bun test tests/integration",
+    "test:browser": "playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.55.1",
+    "hono": "^4.9.6",
+    "jose": "^6.1.0",
+    "drizzle-orm": "^0.44.6",
+    "postgres": "^3.4.7",
+    "zod": "^4.1.11",
+    "typescript": "^5.9.2"
+  }
+}

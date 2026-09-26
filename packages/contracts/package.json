@@ -1,0 +1,14 @@
+{
+  "name": "@pixelpushr/contracts",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./health": "./src/health.ts",
+    "./errors": "./src/errors.ts",
+    "./manifest": "./src/manifest.ts"
+  },
+  "scripts": {
+    "build": "bun build src/health.ts src/errors.ts src/manifest.ts --outdir dist --target browser",
+    "typecheck": "tsc -p tsconfig.json"
+  }
+}
