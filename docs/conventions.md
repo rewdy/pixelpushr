@@ -7,7 +7,7 @@ These conventions adapt the original frontend preference note to this monorepo. 
 - Prefer `type` over `interface` unless an interface is technically required. Avoid TypeScript `enum`; use a `const` object and derived type when needed.
 - Give exported functions and components a brief TSDoc description of behavior, without repeating their type signatures.
 - Use named exports and arrow functions for application code, except where a tool requires a default export or a specific handler shape.
-- Import concrete modules directly. Do not create `index.ts` barrels or `tsconfig` path aliases. Relative imports are the default *within* a workspace package; explicit package-name imports such as `@pixelpushr/contracts/manifest` are welcome *across* workspace packages.
+- Import concrete modules directly. Do not create `index.ts` barrels or `tsconfig` path aliases. Relative imports are the default _within_ a workspace package; explicit package-name imports such as `@pixelpushr/contracts/manifest` are welcome _across_ workspace packages.
 - Keep local types next to their owner. Move truly shared frontend models to `src/models/*.models.ts` (types only); use `packages/contracts` for deliberate web/API contracts. Keep database row types inside the API.
 - Preserve strict TypeScript settings. Validate data at HTTP and environment boundaries; do not use `any` to bypass uncertainty.
 

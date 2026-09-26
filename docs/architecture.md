@@ -6,20 +6,20 @@ The [OpenSpec change](../openspec/changes/build-digital-signage-platform/design.
 
 Pixelpushr is a single-organization, multi-admin, multi-display signage platform. The first account claims the organization and becomes its owner; later administrators join by invitation. Admin endpoints require a session. A display player is a public URL with a random display token and needs no login. Do not use the MVP for sensitive or private media. Multi-tenancy, player access controls, real-time push, device synchronization, and transcoding are not included.
 
-The three playback milestones are deliberately separate: (1) assign one or more always-on playlists; (2) add one or more scheduled playlists to the same cycling queue; (3) let an active override playlist play *alone*, interrupting the current item at its exact start and end. See [operations.md](operations.md#scheduling-and-override-semantics) for configuration and boundary details.
+The three playback milestones are deliberately separate: (1) assign one or more always-on playlists; (2) add one or more scheduled playlists to the same cycling queue; (3) let an active override playlist play _alone_, interrupting the current item at its exact start and end. See [operations.md](operations.md#scheduling-and-override-semantics) for configuration and boundary details.
 
 ## Stack and boundaries
 
-| Area | Choice |
-| --- | --- |
-| Repository | Bun workspaces; TypeScript; shared contracts package |
-| Admin and player | React + Vite static SPA; Wouter routing; TanStack Query for server state |
-| UI | Mantine theme/components; react-icons Lucide set, with `IoPlay` as the logo mark |
-| API | Hono, local Node server and AWS Lambda adapter |
-| Data | PostgreSQL/RDS, Drizzle schema and SQL migrations |
-| Identity | App-owned login screens; local auth for development; Cognito in AWS |
-| Media | S3-compatible storage; direct browser upload via presigned URL; CloudFront delivery |
-| Infrastructure | Docker Compose for local Postgres, Mailpit and Floci; Terraform under `tf/` for AWS |
+| Area             | Choice                                                                              |
+| ---------------- | ----------------------------------------------------------------------------------- |
+| Repository       | Bun workspaces; TypeScript; shared contracts package                                |
+| Admin and player | React + Vite static SPA; Wouter routing; TanStack Query for server state            |
+| UI               | Mantine theme/components; react-icons Lucide set, with `IoPlay` as the logo mark    |
+| API              | Hono, local Node server and AWS Lambda adapter                                      |
+| Data             | PostgreSQL/RDS, Drizzle schema and SQL migrations                                   |
+| Identity         | App-owned login screens; local auth for development; Cognito in AWS                 |
+| Media            | S3-compatible storage; direct browser upload via presigned URL; CloudFront delivery |
+| Infrastructure   | Docker Compose for local Postgres, Mailpit and Floci; Terraform under `tf/` for AWS |
 
 `apps/web` contains both `/admin`-style console pages and the public `/player/:token` route in one static build. Browser calls use `/api/*`; Vite proxies this path locally, and CloudFront routes it to API Gateway in AWS. `apps/api` owns validation, authentication, persistence, schedule resolution, and manifest generation. `packages/contracts` holds intentionally shared types, imported by package name rather than a `tsconfig` alias. The `prototype/` site is the approved, fixture-only visual study, not a second production app.
 
