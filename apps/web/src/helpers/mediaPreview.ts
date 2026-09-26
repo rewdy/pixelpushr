@@ -16,16 +16,24 @@ export const readMediaPreview = async (file: File): Promise<Preview> => {
         video.preload = "metadata";
         video.muted = true;
         video.onloadedmetadata = () => {
-          const result = { width: video.videoWidth, height: video.videoHeight, durationMs: Math.round(video.duration * 1000) };
+          const result = {
+            width: video.videoWidth,
+            height: video.videoHeight,
+            durationMs: Math.round(video.duration * 1000),
+          };
           video.removeAttribute("src");
           video.load();
-          if (!Number.isFinite(result.durationMs) || result.durationMs <= 0) reject(new Error("Video duration is unavailable"));
+          if (!Number.isFinite(result.durationMs) || result.durationMs <= 0)
+            reject(new Error("Video duration is unavailable"));
           else resolve(result);
         };
-        video.onerror = () => reject(new Error("This browser cannot read the video"));
+        video.onerror = () =>
+          reject(new Error("This browser cannot read the video"));
         video.src = url;
       });
     }
     return {};
-  } finally { URL.revokeObjectURL(url); }
+  } finally {
+    URL.revokeObjectURL(url);
+  }
 };

@@ -12,4 +12,10 @@ import { theme } from "./config/theme";
 const queryClient = new QueryClient();
 const root = document.getElementById("root");
 if (!root) throw new Error("Missing root element");
-createRoot(root).render(<QueryClientProvider client={queryClient}><MantineProvider theme={theme} defaultColorScheme="auto"><App /></MantineProvider></QueryClientProvider>);
+createRoot(root).render(
+  <QueryClientProvider client={queryClient}>
+    <MantineProvider theme={theme} defaultColorScheme="auto">
+      <App />
+    </MantineProvider>
+  </QueryClientProvider>,
+);

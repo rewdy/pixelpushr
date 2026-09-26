@@ -1,4 +1,33 @@
-.stage { position: fixed; inset: 0; background: #0b0c0f; color: #f7f8fa; overflow: hidden; }
-.media { width: 100vw; height: 100vh; object-fit: contain; display: block; }
-.empty { min-height: 100vh; display: flex; align-items: center; justify-content: center; text-align: center; padding: 32px; }
-.diagnostic { position: fixed; right: 12px; bottom: 12px; padding: 4px 8px; border-radius: 4px; background: #202125bf; color: #fff; font: 11px "Space Mono", monospace; }
+.stage {
+  position: fixed;
+  inset: 0;
+  background: #0b0c0f;
+  color: #f7f8fa;
+  overflow: hidden;
+}
+.media {
+  width: 100vw;
+  height: 100vh;
+  object-fit: contain;
+  display: block;
+}
+.empty {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 32px;
+}
+.diagnostic {
+  position: fixed;
+  right: 12px;
+  bottom: 12px;
+  padding: 4px 8px;
+  border-radius: 4px;
+  background: #202125bf;
+  color: #fff;
+  font:
+    11px "Space Mono",
+    monospace;
+}

@@ -12,15 +12,26 @@ export const setToken = (token: string | null) => {
 };
 
 /** Sends a JSON request to the API and presents its stable error message. */
-export const requestJson = async <T>(path: string, options: RequestInit = {}): Promise<T> => {
+export const requestJson = async <T>(
+  path: string,
+  options: RequestInit = {},
+): Promise<T> => {
   const token = getToken();
   const response = await fetch(`/api${path}`, {
     ...options,
-    headers: { ...(options.body ? { "content-type": "application/json" } : {}), ...(token ? { authorization: `Bearer ${token}` } : {}), ...options.headers },
+    headers: {
+      ...(options.body ? { "content-type": "application/json" } : {}),
+      ...(token ? { authorization: `Bearer ${token}` } : {}),
+      ...options.headers,
+    },
   });
   if (!response.ok) {
-    const data = await response.json().catch(() => null) as ApiErrorResponse | null;
-    throw new Error(data?.error.message ?? `Request failed (${response.status})`);
+    const data = (await response
+      .json()
+      .catch(() => null)) as ApiErrorResponse | null;
+    throw new Error(
+      data?.error.message ?? `Request failed (${response.status})`,
+    );
   }
   return response.json() as Promise<T>;
 };

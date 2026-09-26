@@ -10,9 +10,14 @@ body {
   background: light-dark(#ffffff, #111111);
 }
 
-* { box-sizing: border-box; }
+* {
+  box-sizing: border-box;
+}
 
-button, a { -webkit-tap-highlight-color: transparent; }
+button,
+a {
+  -webkit-tap-highlight-color: transparent;
+}
 
 .mono-label {
   font-family: "Space Mono", monospace;
@@ -21,8 +26,12 @@ button, a { -webkit-tap-highlight-color: transparent; }
   text-transform: uppercase;
 }
 
-.nav-scroll { scrollbar-width: none; }
-.nav-scroll::-webkit-scrollbar { display: none; }
+.nav-scroll {
+  scrollbar-width: none;
+}
+.nav-scroll::-webkit-scrollbar {
+  display: none;
+}
 
 .sidebar {
   background: light-dark(#f1f3f5, #181818);
@@ -47,10 +56,13 @@ button, a { -webkit-tap-highlight-color: transparent; }
   padding: 9px 12px;
   border-radius: 9px;
   color: var(--mantine-color-dimmed);
-  transition: background 120ms ease, color 120ms ease;
+  transition:
+    background 120ms ease,
+    color 120ms ease;
 }
 
-.nav-item:hover, .nav-item[data-active] {
+.nav-item:hover,
+.nav-item[data-active] {
   background: light-dark(#e4e8ff, rgba(80, 109, 255, 0.16));
   color: light-dark(var(--mantine-color-brand-7), var(--mantine-color-brand-2));
 }
@@ -65,7 +77,10 @@ button, a { -webkit-tap-highlight-color: transparent; }
   background: var(--mantine-color-brand-5);
 }
 
-.mobile-drawer { min-height: 100vh; background: light-dark(#f1f3f5, #181818); }
+.mobile-drawer {
+  min-height: 100vh;
+  background: light-dark(#f1f3f5, #181818);
+}
 
 .player-view {
   min-height: 100vh;
@@ -78,8 +93,12 @@ button, a { -webkit-tap-highlight-color: transparent; }
   position: absolute;
   inset: 0;
   background:
-    radial-gradient(circle at 72% 32%, rgba(80, 109, 255, 0.35) 0 12%, transparent 12.5%),
-    linear-gradient(135deg, rgba(255,255,255,.34) 0 32%, transparent 32.5%),
+    radial-gradient(
+      circle at 72% 32%,
+      rgba(80, 109, 255, 0.35) 0 12%,
+      transparent 12.5%
+    ),
+    linear-gradient(135deg, rgba(255, 255, 255, 0.34) 0 32%, transparent 32.5%),
     linear-gradient(135deg, #d8defd 0 55%, #bac5fa 55% 75%, #f5dfbd 75%);
 }
 
@@ -90,11 +109,19 @@ button, a { -webkit-tap-highlight-color: transparent; }
   z-index: 1;
 }
 
-.player-copy h1 { font-size: clamp(2.8rem, 8vw, 8rem); line-height: .98; letter-spacing: -.07em; }
+.player-copy h1 {
+  font-size: clamp(2.8rem, 8vw, 8rem);
+  line-height: 0.98;
+  letter-spacing: -0.07em;
+}
 
 @media (max-width: 48em) {
-  .admin-shell .mantine-AppShell-main { padding-top: 76px; }
-  .player-copy h1 { font-size: clamp(2.6rem, 13vw, 5rem); }
+  .admin-shell .mantine-AppShell-main {
+    padding-top: 76px;
+  }
+  .player-copy h1 {
+    font-size: clamp(2.6rem, 13vw, 5rem);
+  }
 }
 
 .media-thumb {

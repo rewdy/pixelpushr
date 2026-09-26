@@ -91,12 +91,8 @@
           "name": "assignments_display_id_displays_id_fk",
           "tableFrom": "assignments",
           "tableTo": "displays",
-          "columnsFrom": [
-            "display_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["display_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -104,12 +100,8 @@
           "name": "assignments_playlist_id_playlists_id_fk",
           "tableFrom": "assignments",
           "tableTo": "playlists",
-          "columnsFrom": [
-            "playlist_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["playlist_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -117,12 +109,8 @@
           "name": "assignments_schedule_rule_id_schedule_rules_id_fk",
           "tableFrom": "assignments",
           "tableTo": "schedule_rules",
-          "columnsFrom": [
-            "schedule_rule_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["schedule_rule_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -210,12 +198,8 @@
           "name": "displays_organization_id_organizations_id_fk",
           "tableFrom": "displays",
           "tableTo": "organizations",
-          "columnsFrom": [
-            "organization_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["organization_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -225,16 +209,12 @@
         "displays_player_token_hash_unique": {
           "name": "displays_player_token_hash_unique",
           "nullsNotDistinct": false,
-          "columns": [
-            "player_token_hash"
-          ]
+          "columns": ["player_token_hash"]
         },
         "displays_player_token_unique": {
           "name": "displays_player_token_unique",
           "nullsNotDistinct": false,
-          "columns": [
-            "player_token"
-          ]
+          "columns": ["player_token"]
         }
       },
       "policies": {},
@@ -326,12 +306,8 @@
           "name": "invitations_organization_id_organizations_id_fk",
           "tableFrom": "invitations",
           "tableTo": "organizations",
-          "columnsFrom": [
-            "organization_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["organization_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -341,9 +317,7 @@
         "invitations_token_hash_unique": {
           "name": "invitations_token_hash_unique",
           "nullsNotDistinct": false,
-          "columns": [
-            "token_hash"
-          ]
+          "columns": ["token_hash"]
         }
       },
       "policies": {},
@@ -473,12 +447,8 @@
           "name": "media_assets_organization_id_organizations_id_fk",
           "tableFrom": "media_assets",
           "tableTo": "organizations",
-          "columnsFrom": [
-            "organization_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["organization_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -488,9 +458,7 @@
         "media_assets_object_key_unique": {
           "name": "media_assets_object_key_unique",
           "nullsNotDistinct": false,
-          "columns": [
-            "object_key"
-          ]
+          "columns": ["object_key"]
         }
       },
       "policies": {},
@@ -534,12 +502,8 @@
           "name": "memberships_organization_id_organizations_id_fk",
           "tableFrom": "memberships",
           "tableTo": "organizations",
-          "columnsFrom": [
-            "organization_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["organization_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -547,12 +511,8 @@
           "name": "memberships_user_id_users_id_fk",
           "tableFrom": "memberships",
           "tableTo": "users",
-          "columnsFrom": [
-            "user_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["user_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -560,10 +520,7 @@
       "compositePrimaryKeys": {
         "memberships_organization_id_user_id_pk": {
           "name": "memberships_organization_id_user_id_pk",
-          "columns": [
-            "organization_id",
-            "user_id"
-          ]
+          "columns": ["organization_id", "user_id"]
         }
       },
       "uniqueConstraints": {},
@@ -688,12 +645,8 @@
           "name": "playlist_items_playlist_id_playlists_id_fk",
           "tableFrom": "playlist_items",
           "tableTo": "playlists",
-          "columnsFrom": [
-            "playlist_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["playlist_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -701,12 +654,8 @@
           "name": "playlist_items_media_asset_id_media_assets_id_fk",
           "tableFrom": "playlist_items",
           "tableTo": "media_assets",
-          "columnsFrom": [
-            "media_asset_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["media_asset_id"],
+          "columnsTo": ["id"],
           "onDelete": "restrict",
           "onUpdate": "no action"
         }
@@ -783,12 +732,8 @@
           "name": "playlists_organization_id_organizations_id_fk",
           "tableFrom": "playlists",
           "tableTo": "organizations",
-          "columnsFrom": [
-            "organization_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["organization_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -877,12 +822,8 @@
           "name": "schedule_rules_organization_id_organizations_id_fk",
           "tableFrom": "schedule_rules",
           "tableTo": "organizations",
-          "columnsFrom": [
-            "organization_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["organization_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -959,9 +900,7 @@
         "users_subject_unique": {
           "name": "users_subject_unique",
           "nullsNotDistinct": false,
-          "columns": [
-            "subject"
-          ]
+          "columns": ["subject"]
         }
       },
       "policies": {},
@@ -973,61 +912,37 @@
     "public.assignment_mode": {
       "name": "assignment_mode",
       "schema": "public",
-      "values": [
-        "always",
-        "scheduled",
-        "override"
-      ]
+      "values": ["always", "scheduled", "override"]
     },
     "public.invitation_status": {
       "name": "invitation_status",
       "schema": "public",
-      "values": [
-        "pending",
-        "accepted",
-        "expired"
-      ]
+      "values": ["pending", "accepted", "expired"]
     },
     "public.media_kind": {
       "name": "media_kind",
       "schema": "public",
-      "values": [
-        "image",
-        "video"
-      ]
+      "values": ["image", "video"]
     },
     "public.media_status": {
       "name": "media_status",
       "schema": "public",
-      "values": [
-        "pending",
-        "ready",
-        "failed"
-      ]
+      "values": ["pending", "ready", "failed"]
     },
     "public.member_role": {
       "name": "member_role",
       "schema": "public",
-      "values": [
-        "owner",
-        "admin"
-      ]
+      "values": ["owner", "admin"]
     },
     "public.recurrence_kind": {
       "name": "recurrence_kind",
       "schema": "public",
-      "values": [
-        "none",
-        "weekly"
-      ]
+      "values": ["none", "weekly"]
     },
     "public.video_mode": {
       "name": "video_mode",
       "schema": "public",
-      "values": [
-        "once",
-        "repeat"
-      ]
+      "values": ["once", "repeat"]
     }
   },
   "schemas": {},

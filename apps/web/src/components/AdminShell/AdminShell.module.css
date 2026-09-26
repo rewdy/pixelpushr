@@ -1,6 +1,27 @@
-.navbar { background: light-dark(var(--mantine-color-gray-0), #202125); border-right: 1px solid light-dark(var(--mantine-color-gray-2), #34363b); }
-.main { background: var(--mantine-color-body); }
-.navItem { display: block; width: 100%; padding: 10px 12px; border-radius: var(--mantine-radius-sm); color: var(--mantine-color-text); text-decoration: none; }
-.navItem:hover { background: light-dark(var(--mantine-color-gray-1), #2d3036); }
-.navItem[data-active] { background: light-dark(var(--mantine-color-brand-0), #2d3351); color: var(--mantine-color-brand-5); }
-.mono { font-family: "Space Mono", monospace; letter-spacing: 0.08em; text-transform: uppercase; }
+.navbar {
+  background: light-dark(var(--mantine-color-gray-0), #202125);
+  border-right: 1px solid light-dark(var(--mantine-color-gray-2), #34363b);
+}
+.main {
+  background: var(--mantine-color-body);
+}
+.navItem {
+  display: block;
+  width: 100%;
+  padding: 10px 12px;
+  border-radius: var(--mantine-radius-sm);
+  color: var(--mantine-color-text);
+  text-decoration: none;
+}
+.navItem:hover {
+  background: light-dark(var(--mantine-color-gray-1), #2d3036);
+}
+.navItem[data-active] {
+  background: light-dark(var(--mantine-color-brand-0), #2d3351);
+  color: var(--mantine-color-brand-5);
+}
+.mono {
+  font-family: "Space Mono", monospace;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}

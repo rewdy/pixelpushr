@@ -16,14 +16,33 @@ export const createApp = (dependencies?: AppDependencies) => {
   app.use("*", async (context, next) => {
     const startedAt = performance.now();
     await next();
-    console.info(JSON.stringify({ level: "info", event: "http_request", method: context.req.method, status: context.res.status, durationMs: Math.round(performance.now() - startedAt) }));
+    console.info(
+      JSON.stringify({
+        level: "info",
+        event: "http_request",
+        method: context.req.method,
+        status: context.res.status,
+        durationMs: Math.round(performance.now() - startedAt),
+      }),
+    );
   });
   app.get("/health", async (context) => {
     if (dependencies) {
-      try { await dependencies.db.execute(sql`select 1`); }
-      catch (error) {
-        console.error(JSON.stringify({ level: "error", event: "database_health_failure", message: error instanceof Error ? error.message : "Unknown database error" }));
-        return context.json({ status: "unavailable", service: "api", dependency: "database" }, 503);
+      try {
+        await dependencies.db.execute(sql`select 1`);
+      } catch (error) {
+        console.error(
+          JSON.stringify({
+            level: "error",
+            event: "database_health_failure",
+            message:
+              error instanceof Error ? error.message : "Unknown database error",
+          }),
+        );
+        return context.json(
+          { status: "unavailable", service: "api", dependency: "database" },
+          503,
+        );
       }
     }
     return context.json<HealthResponse>({ status: "ok", service: "api" });
@@ -31,9 +50,24 @@ export const createApp = (dependencies?: AppDependencies) => {
   if (dependencies) {
     registerAuthRoutes(app, dependencies);
     if (dependencies.storage) {
-      registerMediaRoutes(app, { db: dependencies.db, auth: dependencies.auth, storage: dependencies.storage, maxImageBytes: dependencies.maxImageBytes ?? 20 * 1024 * 1024, maxVideoBytes: dependencies.maxVideoBytes ?? 500 * 1024 * 1024 });
-      registerPlaylistRoutes(app, { db: dependencies.db, auth: dependencies.auth, storage: dependencies.storage });
-      registerDisplayRoutes(app, { db: dependencies.db, auth: dependencies.auth, storage: dependencies.storage, publicWebUrl: dependencies.publicWebUrl });
+      registerMediaRoutes(app, {
+        db: dependencies.db,
+        auth: dependencies.auth,
+        storage: dependencies.storage,
+        maxImageBytes: dependencies.maxImageBytes ?? 20 * 1024 * 1024,
+        maxVideoBytes: dependencies.maxVideoBytes ?? 500 * 1024 * 1024,
+      });
+      registerPlaylistRoutes(app, {
+        db: dependencies.db,
+        auth: dependencies.auth,
+        storage: dependencies.storage,
+      });
+      registerDisplayRoutes(app, {
+        db: dependencies.db,
+        auth: dependencies.auth,
+        storage: dependencies.storage,
+        publicWebUrl: dependencies.publicWebUrl,
+      });
     }
     if (dependencies.storage?.kind === "local") {
       const storage = dependencies.storage as LocalMediaStorage;
@@ -42,7 +76,12 @@ export const createApp = (dependencies?: AppDependencies) => {
         const expires = context.req.query("expires") ?? "";
         const signature = context.req.query("signature") ?? "";
         const mimeType = context.req.header("content-type") ?? "";
-        if (!storage.validUpload(key, mimeType, expires, signature)) throw new ApiError(403, "forbidden", "Upload URL is invalid or expired");
+        if (!storage.validUpload(key, mimeType, expires, signature))
+          throw new ApiError(
+            403,
+            "forbidden",
+            "Upload URL is invalid or expired",
+          );
         await storage.writeUpload(key, mimeType, context.req.raw);
         return context.json({ uploaded: true });
       });

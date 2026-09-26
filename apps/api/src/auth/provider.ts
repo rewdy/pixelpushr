@@ -1,6 +1,10 @@
 export type Identity = { subject: string; email: string };
 export type SignUpResult = { subject: string; confirmationRequired: boolean };
-export type Session = { accessToken: string; refreshToken?: string; expiresIn: number };
+export type Session = {
+  accessToken: string;
+  refreshToken?: string;
+  expiresIn: number;
+};
 
 export type AuthProvider = {
   signUp: (email: string, password: string) => Promise<SignUpResult>;
