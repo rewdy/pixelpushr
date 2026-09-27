@@ -8,11 +8,22 @@ import {
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 
 export type StoredObject = { sizeBytes: number; mimeType: string };
+export const maxSmallObjectBytes = 1024 * 1024;
+/** Rejects oversized server-side media writes before storage receives them. */
+export const checkSmallObjectSize = (bytes: Uint8Array) => {
+  if (!bytes.length || bytes.byteLength > maxSmallObjectBytes)
+    throw new Error("Small media object must contain 1 byte to 1 MB");
+};
 export type MediaStorage = {
   kind: "local" | "s3";
   createUploadUrl: (key: string, mimeType: string) => Promise<string>;
   head: (key: string) => Promise<StoredObject | null>;
   readPrefix: (key: string, length: number) => Promise<Uint8Array>;
+  writeSmall: (
+    key: string,
+    mimeType: string,
+    bytes: Uint8Array,
+  ) => Promise<void>;
   remove: (key: string) => Promise<void>;
   publicUrl: (key: string) => string;
 };
@@ -82,6 +93,17 @@ export const createS3Storage = (options: S3Options): MediaStorage => {
       return object.Body
         ? object.Body.transformToByteArray()
         : new Uint8Array();
+    },
+    writeSmall: async (key, mimeType, bytes) => {
+      checkSmallObjectSize(bytes);
+      await client.send(
+        new PutObjectCommand({
+          Bucket: options.bucket,
+          Key: key,
+          Body: bytes,
+          ContentType: mimeType,
+        }),
+      );
     },
     remove: async (key) => {
       await client.send(

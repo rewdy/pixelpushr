@@ -180,21 +180,18 @@ test("admin can upload media and save a playable playlist", async ({
   await expect(
     page.getByRole("heading", { name: "Media library" }),
   ).toBeVisible();
-  await page
-    .locator('input[type="file"]')
-    .setInputFiles({
-      name: "logo.png",
-      mimeType: "image/png",
-      buffer: Buffer.from([137, 80, 78, 71, 13, 10, 26, 10, 1, 2, 3, 4]),
-    });
+  await page.locator('input[type="file"]').setInputFiles({
+    name: "logo.png",
+    mimeType: "image/png",
+    buffer: Buffer.from([137, 80, 78, 71, 13, 10, 26, 10, 1, 2, 3, 4]),
+  });
   await expect(page.getByText("Media is ready for playlists.")).toBeVisible();
   await page.goto("/playlists");
   await page.getByRole("textbox", { name: "New playlist" }).fill("Brand loop");
   await page.getByRole("button", { name: "Create playlist" }).click();
   await expect(page.getByRole("heading", { name: "Brand loop" })).toBeVisible();
-  await page.getByRole("textbox", { name: "Ready asset" }).click();
-  await page.getByRole("option", { name: "logo.png (image)" }).click();
-  await page.getByRole("button", { name: "Add item" }).click();
+  await page.getByRole("button", { name: "Add media" }).click();
+  await page.getByRole("button", { name: "Add logo.png" }).click();
   await page.getByRole("button", { name: "Save playlist" }).click();
   await expect(page.getByText("Playlist saved.")).toBeVisible();
   expect(savedItems).toEqual([

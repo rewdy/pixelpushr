@@ -60,5 +60,7 @@ test("video repeat remains active until its duration expires", async ({
   );
   await page.goto("/player/repeat");
   await expect(page.locator("video")).toBeVisible();
-  await expect(page.locator("img")).toBeVisible({ timeout: 5000 });
+  await page.waitForTimeout(700);
+  await expect(page.locator("video")).toBeVisible();
+  await expect(page.locator("img")).toBeVisible({ timeout: 10000 });
 });

@@ -109,6 +109,14 @@ export const registerPlaylistRoutes = (
             asset.status === "ready"
               ? storage.publicUrl(asset.objectKey)
               : null,
+          previewUrl:
+            asset.status === "ready"
+              ? asset.kind === "image"
+                ? storage.publicUrl(asset.objectKey)
+                : asset.thumbnailKey
+                  ? storage.publicUrl(asset.thumbnailKey)
+                  : null
+              : null,
         },
       })),
     });
@@ -168,18 +176,16 @@ export const registerPlaylistRoutes = (
         .delete(playlistItems)
         .where(eq(playlistItems.playlistId, playlist.id));
       if (body.items.length)
-        await transaction
-          .insert(playlistItems)
-          .values(
-            body.items.map((item, position) => ({
-              playlistId: playlist.id,
-              mediaAssetId: item.mediaAssetId,
-              position,
-              imageDurationMs: item.imageDurationMs ?? null,
-              videoMode: item.videoMode ?? null,
-              repeatDurationMs: item.repeatDurationMs ?? null,
-            })),
-          );
+        await transaction.insert(playlistItems).values(
+          body.items.map((item, position) => ({
+            playlistId: playlist.id,
+            mediaAssetId: item.mediaAssetId,
+            position,
+            imageDurationMs: item.imageDurationMs ?? null,
+            videoMode: item.videoMode ?? null,
+            repeatDurationMs: item.repeatDurationMs ?? null,
+          })),
+        );
       await transaction
         .update(playlists)
         .set({ updatedAt: new Date() })

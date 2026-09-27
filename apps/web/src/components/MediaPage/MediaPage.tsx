@@ -4,7 +4,6 @@ import {
   Button,
   FileButton,
   Group,
-  Image,
   Paper,
   Stack,
   Table,
@@ -13,9 +12,13 @@ import {
 } from "@mantine/core";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { LuUpload } from "react-icons/lu";
-import { readMediaPreview } from "../../helpers/mediaPreview";
 import { requestJson } from "../../helpers/api";
+import {
+  captureVideoThumbnail,
+  readMediaPreview,
+} from "../../helpers/mediaPreview";
 import type { MediaAsset } from "../../models/media.models";
+import { MediaThumbnail } from "../MediaThumbnail/MediaThumbnail";
 
 /** Uploads image/video assets and displays their processing state. */
 export const MediaPage = () => {
@@ -66,6 +69,18 @@ export const MediaPage = () => {
         throw new Error(
           completed.asset.failureReason ?? "Media could not be processed",
         );
+      if (file.type.startsWith("video/")) {
+        try {
+          const thumbnail = await captureVideoThumbnail(file);
+          await requestJson(`/admin/media/${created.asset.id}/thumbnail`, {
+            method: "PUT",
+            headers: { "content-type": "image/jpeg" },
+            body: thumbnail,
+          });
+        } catch {
+          // Poster generation is best-effort; the playable video is ready.
+        }
+      }
     },
     onSettled: () => {
       void queryClient.invalidateQueries({ queryKey: ["media"] });
@@ -118,16 +133,7 @@ export const MediaPage = () => {
                 <Table.Tr key={asset.id}>
                   <Table.Td>
                     <Group gap="md">
-                      {asset.previewUrl ? (
-                        <Image
-                          src={asset.previewUrl}
-                          alt=""
-                          w={48}
-                          h={36}
-                          fit="cover"
-                          radius="sm"
-                        />
-                      ) : null}
+                      <MediaThumbnail asset={asset} width={48} height={36} />
                       <Stack gap={0}>
                         <Text size="sm" fw={600}>
                           {asset.name}

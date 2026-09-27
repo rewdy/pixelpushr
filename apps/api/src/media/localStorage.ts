@@ -1,7 +1,7 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
-import type { MediaStorage } from "./storage";
+import { checkSmallObjectSize, type MediaStorage } from "./storage";
 
 export type LocalMediaStorage = MediaStorage & {
   kind: "local";
@@ -57,7 +57,7 @@ export const createLocalStorage = (
     },
     writeUpload: async (key, mimeType, request) => {
       const path = pathFor(key);
-      await mkdir(join(directory, key.split("/")[0]!), { recursive: true });
+      await mkdir(join(directory, key.slice(0, 36)), { recursive: true });
       await Bun.write(path, request);
       await Bun.write(`${path}.type`, mimeType);
     },
@@ -69,6 +69,13 @@ export const createLocalStorage = (
     },
     readPrefix: async (key, length) =>
       Bun.file(pathFor(key)).slice(0, length).bytes(),
+    writeSmall: async (key, mimeType, bytes) => {
+      checkSmallObjectSize(bytes);
+      const path = pathFor(key);
+      await mkdir(join(directory, key.slice(0, 36)), { recursive: true });
+      await Bun.write(path, bytes);
+      await Bun.write(`${path}.type`, mimeType);
+    },
     remove: async (key) => {
       const file = Bun.file(pathFor(key));
       const type = Bun.file(`${pathFor(key)}.type`);

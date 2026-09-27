@@ -1,13 +1,13 @@
 import { and, eq } from "drizzle-orm";
 import type { Hono } from "hono";
 import { z } from "zod";
-import type { AuthProvider } from "../auth/provider";
 import { getAdmin } from "../auth/guard";
+import type { AuthProvider } from "../auth/provider";
 import type { Database } from "../db/client";
 import { mediaAssets } from "../db/schema";
 import { ApiError } from "../http/errors";
 import { parseJsonBody } from "../http/validation";
-import type { MediaStorage } from "./storage";
+import { type MediaStorage, maxSmallObjectBytes } from "./storage";
 import { matchesSignature, supportedMedia } from "./validation";
 
 export type MediaDependencies = {
@@ -28,6 +28,53 @@ const completeSchema = z.object({
   durationMs: z.number().int().positive().optional(),
 });
 const renameSchema = z.object({ name: z.string().trim().min(1).max(200) });
+const readBoundedThumbnail = async (request: Request): Promise<Uint8Array> => {
+  const contentLength = Number(request.headers.get("content-length"));
+  if (Number.isFinite(contentLength) && contentLength > maxSmallObjectBytes)
+    throw new ApiError(
+      413,
+      "invalid_request",
+      "Thumbnail exceeds the 1 MB limit",
+    );
+  if (!request.body)
+    throw new ApiError(400, "invalid_request", "JPEG thumbnail is required");
+  const reader = request.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let length = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      length += value.byteLength;
+      if (length > maxSmallObjectBytes) {
+        void reader.cancel();
+        throw new ApiError(
+          413,
+          "invalid_request",
+          "Thumbnail exceeds the 1 MB limit",
+        );
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  if (!length)
+    throw new ApiError(400, "invalid_request", "JPEG thumbnail is required");
+  const bytes = new Uint8Array(length);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  if (!matchesSignature("image/jpeg", bytes))
+    throw new ApiError(
+      400,
+      "invalid_request",
+      "Thumbnail must be a JPEG image",
+    );
+  return bytes;
+};
 
 const serializeAsset = (
   asset: typeof mediaAssets.$inferSelect,
@@ -36,8 +83,12 @@ const serializeAsset = (
   ...asset,
   url: asset.status === "ready" ? storage.publicUrl(asset.objectKey) : null,
   previewUrl:
-    asset.status === "ready" && asset.kind === "image"
-      ? storage.publicUrl(asset.objectKey)
+    asset.status === "ready"
+      ? asset.kind === "image"
+        ? storage.publicUrl(asset.objectKey)
+        : asset.thumbnailKey
+          ? storage.publicUrl(asset.thumbnailKey)
+          : null
       : null,
 });
 
@@ -177,6 +228,55 @@ export const registerMediaRoutes = (
     return context.json({ asset: serializeAsset(updated, storage) });
   });
 
+  app.put("/admin/media/:id/thumbnail", async (context) => {
+    const { membership } = await getAdmin(context, db, auth);
+    const asset = await db.query.mediaAssets.findFirst({
+      where: and(
+        eq(mediaAssets.organizationId, membership.organizationId),
+        eq(mediaAssets.id, context.req.param("id")),
+      ),
+    });
+    if (!asset) throw new ApiError(404, "not_found", "Media asset not found");
+    if (asset.kind !== "video" || asset.status !== "ready")
+      throw new ApiError(
+        409,
+        "conflict",
+        "Only ready videos accept thumbnails",
+      );
+    if (
+      context.req.header("content-type")?.split(";")[0]?.trim() !== "image/jpeg"
+    )
+      throw new ApiError(
+        400,
+        "invalid_request",
+        "Thumbnail must use image/jpeg",
+      );
+    const bytes = await readBoundedThumbnail(context.req.raw);
+    const thumbnailKey = `${membership.organizationId}/${crypto.randomUUID()}`;
+    await storage.writeSmall(thumbnailKey, "image/jpeg", bytes);
+    let updated: typeof mediaAssets.$inferSelect;
+    try {
+      const rows = await db
+        .update(mediaAssets)
+        .set({ thumbnailKey, updatedAt: new Date() })
+        .where(
+          and(
+            eq(mediaAssets.id, asset.id),
+            eq(mediaAssets.organizationId, membership.organizationId),
+          ),
+        )
+        .returning();
+      const row = rows[0];
+      if (!row) throw new ApiError(404, "not_found", "Media asset not found");
+      updated = row;
+    } catch (error) {
+      await storage.remove(thumbnailKey);
+      throw error;
+    }
+    if (asset.thumbnailKey) await storage.remove(asset.thumbnailKey);
+    return context.json({ asset: serializeAsset(updated, storage) });
+  });
+
   app.delete("/admin/media/:id", async (context) => {
     const { membership } = await getAdmin(context, db, auth);
     const asset = await db.query.mediaAssets.findFirst({
@@ -196,6 +296,7 @@ export const registerMediaRoutes = (
       );
     }
     await storage.remove(asset.objectKey);
+    if (asset.thumbnailKey) await storage.remove(asset.thumbnailKey);
     return context.json({ deleted: true });
   });
 };

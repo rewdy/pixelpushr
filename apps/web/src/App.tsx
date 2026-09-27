@@ -16,19 +16,17 @@ import {
   RegisterScreen,
   SetupScreen,
 } from "./components/AuthScreens/AuthScreens";
-import { InviteScreen } from "./components/InviteScreen/InviteScreen";
-import { PeoplePage } from "./components/PeoplePage/PeoplePage";
-import { SettingsPage } from "./components/SettingsPage/SettingsPage";
-import { MediaPage } from "./components/MediaPage/MediaPage";
-import {
-  PlaylistEditorPage,
-  PlaylistsPage,
-} from "./components/PlaylistsPage/PlaylistsPage";
-import { PlayerPage } from "./components/PlayerPage/PlayerPage";
 import {
   DisplayEditorPage,
   DisplaysPage,
 } from "./components/DisplaysPage/DisplaysPage";
+import { InviteScreen } from "./components/InviteScreen/InviteScreen";
+import { MediaPage } from "./components/MediaPage/MediaPage";
+import { PeoplePage } from "./components/PeoplePage/PeoplePage";
+import { PlayerPage } from "./components/PlayerPage/PlayerPage";
+import { PlaylistEditorPage } from "./components/PlaylistsPage/PlaylistEditorPage";
+import { PlaylistsPage } from "./components/PlaylistsPage/PlaylistsPage";
+import { SettingsPage } from "./components/SettingsPage/SettingsPage";
 import { getToken, requestJson } from "./helpers/api";
 
 type MeResponse = {

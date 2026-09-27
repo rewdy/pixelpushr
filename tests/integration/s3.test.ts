@@ -34,3 +34,30 @@ test("Floci S3 supports presigned upload and public media delivery", async () =>
     await storage.remove(key);
   }
 });
+
+test("Floci S3 stores bounded JPEG thumbnails", async () => {
+  const storage = createS3Storage({
+    region: "us-east-1",
+    bucket: "pixelpushr-media",
+    publicBaseUrl: `${endpoint}/pixelpushr-media`,
+    endpoint,
+    accessKeyId: "test",
+    secretAccessKey: "test",
+  });
+  const key = `${crypto.randomUUID()}/${crypto.randomUUID()}`;
+  const jpeg = new Uint8Array([255, 216, 255, 217]);
+  try {
+    await storage.writeSmall(key, "image/jpeg", jpeg);
+    expect(await storage.head(key)).toEqual({
+      sizeBytes: jpeg.length,
+      mimeType: "image/jpeg",
+    });
+    expect(await storage.readPrefix(key, 4)).toEqual(jpeg);
+    expect((await fetch(storage.publicUrl(key))).status).toBe(200);
+    await expect(
+      storage.writeSmall(key, "image/jpeg", new Uint8Array(1024 * 1024 + 1)),
+    ).rejects.toThrow();
+  } finally {
+    await storage.remove(key);
+  }
+});

@@ -10,6 +10,7 @@ import {
   testDatabaseAdminUrl,
   testS3Endpoint,
 } from "../config";
+import { videoBase64 } from "../fixtures/videoBase64";
 
 test.describe.configure({ mode: "serial" });
 
@@ -166,15 +167,83 @@ test.afterAll(async () => {
       secretAccessKey: "test",
     });
     for (const asset of await connection.db
-      .select({ objectKey: mediaAssets.objectKey })
-      .from(mediaAssets))
+      .select({
+        objectKey: mediaAssets.objectKey,
+        thumbnailKey: mediaAssets.thumbnailKey,
+      })
+      .from(mediaAssets)) {
       await storage.remove(asset.objectKey);
+      if (asset.thumbnailKey) await storage.remove(asset.thumbnailKey);
+    }
   }
   if (connection) await connection.close();
   if (admin) {
     await admin`DROP DATABASE ${admin(databaseName)} WITH (FORCE)`;
     await admin.end();
   }
+});
+
+test("video uploads get a poster when possible and stay ready when poster upload fails", async ({
+  page,
+}) => {
+  await page.addInitScript(
+    (accessToken) =>
+      sessionStorage.setItem("pixelpushr-admin-session", accessToken),
+    token,
+  );
+  await page.goto("/media");
+  const video = Buffer.from(videoBase64, "base64");
+  await page.locator('input[type="file"]').setInputFiles({
+    name: "poster-video.mp4",
+    mimeType: "video/mp4",
+    buffer: video,
+  });
+  await expect(page.getByText("Media is ready for playlists.")).toBeVisible();
+  const posters = await page.evaluate(async () => {
+    const response = await fetch("/api/admin/media", {
+      headers: {
+        authorization: `Bearer ${sessionStorage.getItem("pixelpushr-admin-session")}`,
+      },
+    });
+    return (await response.json()) as {
+      assets: { name: string; status: string; previewUrl: string | null }[];
+    };
+  });
+  expect(
+    posters.assets.find((asset) => asset.name === "poster-video.mp4"),
+  ).toMatchObject({
+    status: "ready",
+    previewUrl: expect.stringContaining("pixelpushr-media"),
+  });
+
+  await page.route("**/api/admin/media/*/thumbnail", (route) =>
+    route.fulfill({
+      status: 500,
+      json: { error: { code: "internal_error", message: "Fixture failure" } },
+    }),
+  );
+  await page.locator('input[type="file"]').setInputFiles({
+    name: "fallback-video.mp4",
+    mimeType: "video/mp4",
+    buffer: video,
+  });
+  await expect(page.getByText("Media is ready for playlists.")).toBeVisible();
+  const fallback = await page.evaluate(async () => {
+    const response = await fetch("/api/admin/media", {
+      headers: {
+        authorization: `Bearer ${sessionStorage.getItem("pixelpushr-admin-session")}`,
+      },
+    });
+    return (await response.json()) as {
+      assets: { name: string; status: string; previewUrl: string | null }[];
+    };
+  });
+  expect(
+    fallback.assets.find((asset) => asset.name === "fallback-video.mp4"),
+  ).toMatchObject({
+    status: "ready",
+    previewUrl: null,
+  });
 });
 
 test("upload media and publish an ordered playlist through the real API", async ({
@@ -201,9 +270,8 @@ test("upload media and publish an ordered playlist through the real API", async 
   await page.getByRole("textbox", { name: "New playlist" }).fill("Brand loop");
   await page.getByRole("button", { name: "Create playlist" }).click();
   await expect(page.getByRole("heading", { name: "Brand loop" })).toBeVisible();
-  await page.getByRole("textbox", { name: "Ready asset" }).click();
-  await page.getByRole("option", { name: "brand.png (image)" }).click();
-  await page.getByRole("button", { name: "Add item" }).click();
+  await page.getByRole("button", { name: "Add media" }).click();
+  await page.getByRole("button", { name: "Add brand.png" }).click();
   await page.getByRole("button", { name: "Save playlist" }).click();
   await expect(page.getByText("Playlist saved.")).toBeVisible();
   await page.reload();
@@ -239,9 +307,8 @@ test("upload media and publish an ordered playlist through the real API", async 
     .getByRole("textbox", { name: "New playlist" })
     .fill("Weekly campaign");
   await page.getByRole("button", { name: "Create playlist" }).click();
-  await page.getByRole("textbox", { name: "Ready asset" }).click();
-  await page.getByRole("option", { name: "brand.png (image)" }).click();
-  await page.getByRole("button", { name: "Add item" }).click();
+  await page.getByRole("button", { name: "Add media" }).click();
+  await page.getByRole("button", { name: "Add brand.png" }).click();
   await page.getByRole("button", { name: "Save playlist" }).click();
   await page.goto("/displays");
   await page.getByRole("link", { name: "Assign playlists" }).click();
@@ -275,4 +342,218 @@ test("upload media and publish an ordered playlist through the real API", async 
       "Override saved. Players will pick it up on their next refresh.",
     ),
   ).toBeVisible();
+});
+
+test("visual picker and bulk draft edits preserve duplicate items and save boundary", async ({
+  page,
+}) => {
+  await page.addInitScript(
+    (accessToken) =>
+      sessionStorage.setItem("pixelpushr-admin-session", accessToken),
+    token,
+  );
+  await page.goto("/playlists");
+  await page
+    .getByRole("textbox", { name: "New playlist" })
+    .fill("Bulk editor test");
+  await page.getByRole("button", { name: "Create playlist" }).click();
+  await expect(
+    page.getByRole("heading", { name: "Bulk editor test" }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Add media" }).click();
+  const filter = page.getByRole("textbox", { name: "Search ready media" });
+  await filter.fill("poster-video");
+  await expect(
+    page.getByRole("button", { name: "Add poster-video.mp4" }),
+  ).toBeVisible();
+  await expect(page.getByRole("button", { name: "Add brand.png" })).toHaveCount(
+    0,
+  );
+  await filter.clear();
+  await page.getByRole("button", { name: "Close media" }).click();
+  await expect(
+    page.getByRole("textbox", { name: "Search ready media" }),
+  ).toHaveCount(0);
+  await page.getByRole("button", { name: "Add media" }).click();
+  await page.getByRole("button", { name: "Add brand.png" }).click();
+  await page.getByRole("button", { name: "Add brand.png" }).click();
+  await page.getByRole("button", { name: "Add poster-video.mp4" }).click();
+  await page.getByRole("button", { name: "Add fallback-video.mp4" }).click();
+  await expect(
+    page.getByRole("textbox", { name: "Display seconds" }),
+  ).toHaveCount(2);
+  const refetch = page.waitForResponse(
+    (response) =>
+      response.url().includes("/api/admin/playlists/") &&
+      response.request().method() === "GET",
+  );
+  await page.evaluate(() =>
+    window.dispatchEvent(new Event("visibilitychange")),
+  );
+  await refetch;
+  await expect(page.getByRole("checkbox", { name: /Select item/ })).toHaveCount(
+    4,
+  );
+  await expect(
+    page.getByLabel("Video thumbnail unavailable").first(),
+  ).toBeVisible();
+  await expect(page.locator("video")).toHaveCount(0);
+  await page.getByRole("textbox", { name: "Video playback" }).first().click();
+  await page.getByRole("option", { name: "Repeat for duration" }).click();
+  await page.getByRole("checkbox", { name: "Select item 1" }).check();
+  await page.getByRole("checkbox", { name: "Select item 3" }).check();
+  await page.getByRole("checkbox", { name: "Select item 4" }).check();
+  await expect(
+    page.getByText("3 selected · 2 can receive a duration"),
+  ).toBeVisible();
+  await page
+    .getByRole("textbox", { name: "Bulk duration (seconds)" })
+    .fill("12");
+  await page.getByRole("button", { name: "Apply duration" }).click();
+  await expect(page.getByText("2 items updated.")).toBeVisible();
+  await expect(
+    page.getByRole("textbox", { name: "Display seconds" }).first(),
+  ).toHaveValue("12");
+  await expect(
+    page.getByRole("textbox", { name: "Display seconds" }).nth(1),
+  ).toHaveValue("8");
+  await expect(
+    page.getByRole("textbox", { name: "Repeat seconds" }),
+  ).toHaveValue("12");
+  await page.getByRole("button", { name: "Deselect all" }).click();
+  await expect(page.getByRole("button", { name: "Deselect all" })).toHaveCount(
+    0,
+  );
+  for (const position of [1, 2, 3, 4])
+    await expect(
+      page.getByRole("checkbox", { name: `Select item ${position}` }),
+    ).not.toBeChecked();
+  await expect(
+    page.getByRole("textbox", { name: "Display seconds" }).first(),
+  ).toHaveValue("12");
+  await expect(
+    page.getByRole("textbox", { name: "Repeat seconds" }),
+  ).toHaveValue("12");
+  await page.getByRole("button", { name: "Save playlist" }).click();
+  await expect(page.getByText("Playlist saved.")).toBeVisible();
+  await page.reload();
+  await expect(page.getByRole("checkbox", { name: /Select item/ })).toHaveCount(
+    4,
+  );
+  await expect(
+    page.getByRole("textbox", { name: "Display seconds" }).first(),
+  ).toHaveValue("12");
+  await expect(
+    page.getByRole("textbox", { name: "Repeat seconds" }),
+  ).toHaveValue("12");
+  await page.getByRole("checkbox", { name: "Select item 1" }).check();
+  await page.getByRole("checkbox", { name: "Select item 3" }).check();
+  await page.getByRole("checkbox", { name: "Select item 4" }).check();
+  await page.getByRole("button", { name: "Delete selected" }).click();
+  await expect(page.getByRole("checkbox", { name: /Select item/ })).toHaveCount(
+    1,
+  );
+  await page.reload();
+  await expect(page.getByRole("checkbox", { name: /Select item/ })).toHaveCount(
+    4,
+  );
+  await page.setViewportSize({ width: 700, height: 800 });
+  await page.getByRole("button", { name: "Add media" }).click();
+  await expect(page.getByRole("dialog", { name: "Ready media" })).toBeVisible();
+  await expect(
+    page.getByRole("textbox", { name: "Search ready media" }),
+  ).toBeVisible();
+});
+
+test("draft preview loops images and videos without publishing", async ({
+  page,
+}) => {
+  await page.addInitScript(
+    (accessToken) =>
+      sessionStorage.setItem("pixelpushr-admin-session", accessToken),
+    token,
+  );
+  await page.goto("/playlists");
+  await page
+    .getByRole("textbox", { name: "New playlist" })
+    .fill("Preview test");
+  await page.getByRole("button", { name: "Create playlist" }).click();
+  await page.getByRole("button", { name: "Show preview" }).click();
+  await expect(page.getByText("No items in this preview")).toBeVisible();
+  await page.getByRole("button", { name: "Add media" }).click();
+  await page.getByRole("button", { name: "Add brand.png" }).click();
+  await page.getByRole("button", { name: "Add poster-video.mp4" }).click();
+  await expect(page.getByTestId("preview-media")).toHaveJSProperty(
+    "tagName",
+    "IMG",
+  );
+  await page.getByRole("textbox", { name: "Display seconds" }).fill("1");
+  await expect(page.getByText(/\d+%/)).toBeVisible();
+  await expect(page.getByTestId("preview-media")).toHaveJSProperty(
+    "tagName",
+    "VIDEO",
+    { timeout: 4000 },
+  );
+  await page.getByRole("button", { name: "Hide preview" }).click();
+  await expect(page.getByTestId("compact-preview")).toHaveCount(0);
+  await page.getByRole("button", { name: "Show preview" }).click();
+  await expect(page.getByTestId("preview-media")).toHaveJSProperty(
+    "tagName",
+    "IMG",
+  );
+  await page.getByRole("textbox", { name: "Display seconds" }).fill("3");
+  await page.waitForTimeout(1300);
+  await expect(page.getByTestId("preview-media")).toHaveJSProperty(
+    "tagName",
+    "IMG",
+  );
+  await page.getByRole("button", { name: "Add brand.png" }).click();
+  await expect(page.getByTestId("preview-media")).toHaveJSProperty(
+    "tagName",
+    "IMG",
+  );
+  await page.reload();
+  await expect(page.getByText("This playlist is empty.")).toBeVisible();
+});
+
+test("draft preview repeats video until its configured duration", async ({
+  page,
+}) => {
+  await page.addInitScript(
+    (accessToken) =>
+      sessionStorage.setItem("pixelpushr-admin-session", accessToken),
+    token,
+  );
+  await page.goto("/playlists");
+  await page
+    .getByRole("textbox", { name: "New playlist" })
+    .fill("Repeat preview test");
+  await page.getByRole("button", { name: "Create playlist" }).click();
+  await page.getByRole("button", { name: "Add media" }).click();
+  await page.getByRole("button", { name: "Add poster-video.mp4" }).click();
+  await page.getByRole("button", { name: "Add brand.png" }).click();
+  await page.getByRole("textbox", { name: "Video playback" }).click();
+  await page.getByRole("option", { name: "Repeat for duration" }).click();
+  await page.getByRole("textbox", { name: "Repeat seconds" }).fill("2");
+  await page.getByRole("textbox", { name: "Display seconds" }).fill("1");
+  await page.getByRole("button", { name: "Show preview" }).click();
+  await expect(page.getByTestId("preview-media")).toHaveJSProperty(
+    "tagName",
+    "VIDEO",
+  );
+  await page.waitForTimeout(1000);
+  await expect(page.getByTestId("preview-media")).toHaveJSProperty(
+    "tagName",
+    "VIDEO",
+  );
+  await expect(page.getByTestId("preview-media")).toHaveJSProperty(
+    "tagName",
+    "IMG",
+    { timeout: 2500 },
+  );
+  await expect(page.getByTestId("preview-media")).toHaveJSProperty(
+    "tagName",
+    "VIDEO",
+    { timeout: 2500 },
+  );
 });

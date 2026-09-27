@@ -20,6 +20,7 @@ let app: ReturnType<typeof createApp>;
 let mediaDirectory: string;
 let readyImageId: string;
 let readyPlaylistId: string;
+let mediaStorage: ReturnType<typeof createLocalStorage>;
 const sentInvitations: { email: string; url: string }[] = [];
 
 describe("first-run organization setup", () => {
@@ -34,6 +35,11 @@ describe("first-run organization setup", () => {
         .pathname,
     });
     mediaDirectory = await mkdtemp(join(tmpdir(), "pixelpushr-media-test-"));
+    mediaStorage = createLocalStorage(
+      mediaDirectory,
+      "http://127.0.0.1:5173",
+      "test-secret-longer-than-thirty-two-characters",
+    );
     app = createApp({
       db: connection.db,
       auth: createLocalAuth(
@@ -46,11 +52,7 @@ describe("first-run organization setup", () => {
         },
       },
       publicWebUrl: "http://127.0.0.1:5173",
-      storage: createLocalStorage(
-        mediaDirectory,
-        "http://127.0.0.1:5173",
-        "test-secret-longer-than-thirty-two-characters",
-      ),
+      storage: mediaStorage,
     });
   });
 
@@ -368,6 +370,185 @@ describe("first-run organization setup", () => {
     expect(
       ((await oversize.json()) as { asset: { status: string } }).asset.status,
     ).toBe("failed");
+  });
+
+  test("ready video thumbnails validate uploads, serialize, and clean up", async () => {
+    const login = await app.request("/auth/login", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        email: "owner@example.com",
+        password: "super-long-password",
+      }),
+    });
+    const token = ((await login.json()) as { accessToken: string }).accessToken;
+    const headers = { authorization: `Bearer ${token}` };
+    const mp4 = new Uint8Array([
+      0, 0, 0, 16, 102, 116, 121, 112, 105, 115, 111, 109, 0, 0, 0, 0,
+    ]);
+    const created = await app.request("/admin/media/uploads", {
+      method: "POST",
+      headers: { ...headers, "content-type": "application/json" },
+      body: JSON.stringify({
+        name: "Countdown",
+        mimeType: "video/mp4",
+        sizeBytes: mp4.length,
+      }),
+    });
+    const { asset, uploadUrl } = (await created.json()) as {
+      asset: { id: string };
+      uploadUrl: string;
+    };
+    const upload = new URL(uploadUrl);
+    expect(
+      (
+        await app.request(
+          upload.pathname.replace(/^\/api/, "") + upload.search,
+          {
+            method: "PUT",
+            headers: { "content-type": "video/mp4" },
+            body: mp4,
+          },
+        )
+      ).status,
+    ).toBe(200);
+    const completed = await app.request(`/admin/media/${asset.id}/complete`, {
+      method: "POST",
+      headers: { ...headers, "content-type": "application/json" },
+      body: JSON.stringify({ width: 640, height: 360, durationMs: 5000 }),
+    });
+    expect(
+      ((await completed.json()) as { asset: { previewUrl: string | null } })
+        .asset.previewUrl,
+    ).toBeNull();
+    const playlist = await app.request("/admin/playlists", {
+      method: "POST",
+      headers: { ...headers, "content-type": "application/json" },
+      body: JSON.stringify({ name: "Thumbnail test" }),
+    });
+    const playlistId = ((await playlist.json()) as { playlist: { id: string } })
+      .playlist.id;
+    await app.request(`/admin/playlists/${playlistId}/items`, {
+      method: "PUT",
+      headers: { ...headers, "content-type": "application/json" },
+      body: JSON.stringify({
+        items: [{ mediaAssetId: asset.id, videoMode: "once" }],
+      }),
+    });
+    const withoutThumbnail = await app.request(
+      `/admin/playlists/${playlistId}`,
+      { headers },
+    );
+    expect(
+      (
+        (await withoutThumbnail.json()) as {
+          items: { asset: { previewUrl: string | null } }[];
+        }
+      ).items[0]?.asset.previewUrl,
+    ).toBeNull();
+
+    const endpoint = `/admin/media/${asset.id}/thumbnail`;
+    const jpeg = new Uint8Array([255, 216, 255, 224, 0, 1, 255, 217]);
+    expect(
+      (
+        await app.request(endpoint, {
+          method: "PUT",
+          headers: { "content-type": "image/jpeg" },
+          body: jpeg,
+        })
+      ).status,
+    ).toBe(401);
+    expect(
+      (
+        await app.request(
+          "/admin/media/00000000-0000-0000-0000-000000000000/thumbnail",
+          {
+            method: "PUT",
+            headers: { ...headers, "content-type": "image/jpeg" },
+            body: jpeg,
+          },
+        )
+      ).status,
+    ).toBe(404);
+    expect(
+      (
+        await app.request(`/admin/media/${readyImageId}/thumbnail`, {
+          method: "PUT",
+          headers: { ...headers, "content-type": "image/jpeg" },
+          body: jpeg,
+        })
+      ).status,
+    ).toBe(409);
+    expect(
+      (
+        await app.request(endpoint, {
+          method: "PUT",
+          headers: { ...headers, "content-type": "image/png" },
+          body: jpeg,
+        })
+      ).status,
+    ).toBe(400);
+    expect(
+      (
+        await app.request(endpoint, {
+          method: "PUT",
+          headers: { ...headers, "content-type": "image/jpeg" },
+          body: new Uint8Array([1, 2, 3]),
+        })
+      ).status,
+    ).toBe(400);
+    expect(
+      (
+        await app.request(endpoint, {
+          method: "PUT",
+          headers: { ...headers, "content-type": "image/jpeg" },
+          body: new Uint8Array(1024 * 1024 + 1),
+        })
+      ).status,
+    ).toBe(413);
+    const thumbnail = await app.request(endpoint, {
+      method: "PUT",
+      headers: { ...headers, "content-type": "image/jpeg" },
+      body: jpeg,
+    });
+    expect(thumbnail.status).toBe(200);
+    const thumbAsset = (
+      (await thumbnail.json()) as {
+        asset: { previewUrl: string; thumbnailKey: string };
+      }
+    ).asset;
+    expect(thumbAsset.previewUrl).toContain(thumbAsset.thumbnailKey);
+    expect((await mediaStorage.head(thumbAsset.thumbnailKey))?.sizeBytes).toBe(
+      jpeg.length,
+    );
+    const list = await app.request("/admin/media", { headers });
+    const listed = (
+      (await list.json()) as {
+        assets: { id: string; previewUrl: string | null }[];
+      }
+    ).assets.find((item) => item.id === asset.id);
+    expect(listed?.previewUrl).toBe(thumbAsset.previewUrl);
+    const detail = await app.request(`/admin/playlists/${playlistId}`, {
+      headers,
+    });
+    expect(
+      ((await detail.json()) as { items: { asset: { previewUrl: string } }[] })
+        .items[0]?.asset.previewUrl,
+    ).toBe(thumbAsset.previewUrl);
+    await app.request(`/admin/playlists/${playlistId}/items`, {
+      method: "PUT",
+      headers: { ...headers, "content-type": "application/json" },
+      body: JSON.stringify({ items: [] }),
+    });
+    expect(
+      (
+        await app.request(`/admin/media/${asset.id}`, {
+          method: "DELETE",
+          headers,
+        })
+      ).status,
+    ).toBe(200);
+    expect(await mediaStorage.head(thumbAsset.thumbnailKey)).toBeNull();
   });
 
   test("playlist item order and playback settings survive reload", async () => {
