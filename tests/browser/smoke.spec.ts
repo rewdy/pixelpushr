@@ -48,6 +48,7 @@ test("public player route loads", async ({ page }) => {
   );
   await page.goto("/player/fixture-token");
   await expect(page.locator('img[data-player-layer="current"]')).toBeVisible();
+  await expect(page.getByRole("button")).toHaveCount(0);
 });
 
 test("owner can send an invitation through the console", async ({ page }) => {
@@ -129,6 +130,8 @@ test("admin can upload media and save a playable playlist", async ({
     failureReason: null,
     url: "/logo.png",
     previewUrl: null,
+    contentVersion: "asset-one",
+    tags: [],
   };
   let assets: (typeof readyAsset)[] = [];
   let savedItems: { mediaAssetId: string; imageDurationMs: number }[] = [];

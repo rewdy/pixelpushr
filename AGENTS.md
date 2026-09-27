@@ -1,6 +1,6 @@
 # Agent guide for pixelpushr
 
-Read [README.md](README.md) for setup, then [docs/architecture.md](docs/architecture.md), [docs/conventions.md](docs/conventions.md), and [docs/design-system.md](docs/design-system.md) for the decisions behind the code. [docs/operations.md](docs/operations.md) is the operator walkthrough. The active [OpenSpec tasks](openspec/changes/build-digital-signage-platform/tasks.md) are the implementation checklist; do not mark a task complete without verification.
+Read [README.md](README.md) for setup, then [docs/architecture.md](docs/architecture.md), [docs/conventions.md](docs/conventions.md), and [docs/design-system.md](docs/design-system.md) for the decisions behind the code. [docs/operations.md](docs/operations.md) is the operator walkthrough. The archived [media-management tasks](openspec/changes/archive/2026-09-27-manage-media-library/tasks.md) record the completed refinement; the active [platform deployment task](openspec/changes/build-digital-signage-platform/tasks.md) remains an implementation checklist. Do not mark a task complete without verification.
 
 ## Repository map
 
@@ -25,6 +25,7 @@ Use `bun run check`, `bun run typecheck`, `bun run build`, and `bun run test:uni
 - Preserve the approved UI direction: headerless admin shell, shaded sidebar, neutral grays, Manrope/Space Mono, small radii, system light/dark, Mantine-first styling. Keep the player visually control-free.
 - Keep admin APIs authenticated; the public player is intentionally open for this MVP. Do not add private-content assumptions or expose admin data in player manifests.
 - The API resolves additive schedules in the organization timezone. Normal queue updates wait for rollover; override start/end and priority changes interrupt immediately. Retain server-time compensation and offline override expiry behavior when changing manifests or the player.
+- Same-kind media replacements preserve asset and playlist identities. In-use deletion needs an impact confirmation; old media URLs remain for a seven-day handoff and are removed by the scheduled/local media cleanup job. Keep replacement candidates out of public manifests and never eagerly delete referenced objects.
 - Validate request and environment inputs; use shared error conventions. Add a migration for schema changes and test a clean database. Do not log secrets, raw tokens, or presigned URLs.
 - AWS Terraform has passed local validation but has **not** been applied or smoke-tested. OpenSpec task 7.2 remains unchecked. Never run `terraform apply`, upload to AWS, or mark 7.2 complete without the operator's deployment details and explicit authorization. See [operations.md](docs/operations.md#aws-deployment) for prerequisites and steps.
 - Keep generated screenshots, build outputs, local media, `.env`, Terraform state, and Lambda zip artifacts out of commits. Review `git status` before staging; preserve unrelated user changes.

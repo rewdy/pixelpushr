@@ -3,7 +3,11 @@ import { expect, test } from "@playwright/test";
 import { migrate } from "drizzle-orm/postgres-js/migrator";
 import postgres from "postgres";
 import { createDatabase } from "../../apps/api/src/db/client";
-import { mediaAssets } from "../../apps/api/src/db/schema";
+import {
+  mediaAssets,
+  mediaReplacements,
+  retiredMediaObjects,
+} from "../../apps/api/src/db/schema";
 import { createS3Storage } from "../../apps/api/src/media/storage";
 import {
   browserTestApiPort,
@@ -194,6 +198,14 @@ test.afterAll(async () => {
       await storage.remove(asset.objectKey);
       if (asset.thumbnailKey) await storage.remove(asset.thumbnailKey);
     }
+    for (const candidate of await connection.db
+      .select({ objectKey: mediaReplacements.objectKey })
+      .from(mediaReplacements))
+      await storage.remove(candidate.objectKey);
+    for (const retired of await connection.db
+      .select({ objectKey: retiredMediaObjects.objectKey })
+      .from(retiredMediaObjects))
+      await storage.remove(retired.objectKey);
   }
   if (connection) await connection.close();
   if (admin) {
@@ -683,4 +695,134 @@ test("draft preview repeats video until its configured duration", async ({
     "VIDEO",
     { timeout: 2500 },
   );
+});
+
+test("media library manages rename, tags, replacement, and informed deletion", async ({
+  page,
+}) => {
+  await page.addInitScript(
+    (accessToken) =>
+      sessionStorage.setItem("pixelpushr-admin-session", accessToken),
+    token,
+  );
+  await page.goto("/media");
+  const row = () => page.getByRole("row").filter({ hasText: "brand" });
+  await row().getByRole("button", { name: "Rename" }).click();
+  const rename = page.getByRole("dialog", { name: "Rename brand.png" });
+  await rename
+    .getByRole("textbox", { name: "Asset name" })
+    .fill("brand refreshed.png");
+  await rename.getByRole("button", { name: "Save name" }).click();
+  await expect(
+    page.getByRole("row").filter({ hasText: "brand refreshed.png" }),
+  ).toBeVisible();
+  await row().getByRole("button", { name: "Tags" }).click();
+  const tagsDialog = page.getByRole("dialog", {
+    name: "Edit tags for brand refreshed.png",
+  });
+  await tagsDialog.getByRole("textbox", { name: "Tags" }).fill("Weekly");
+  await tagsDialog.getByRole("textbox", { name: "Tags" }).press("Enter");
+  await tagsDialog.getByRole("button", { name: "Save tags" }).click();
+  await expect(row()).toContainText("Weekly");
+  await page.getByRole("textbox", { name: "Filter by tags" }).click();
+  await page.getByRole("option", { name: "Weekly" }).click();
+  await expect(row()).toBeVisible();
+  await page.getByRole("textbox", { name: "Search media" }).fill("not-a-match");
+  await expect(row()).toHaveCount(0);
+  await page.getByRole("textbox", { name: "Search media" }).fill("");
+  await row().getByRole("button", { name: "Replace" }).click();
+  const replace = page.getByRole("dialog", {
+    name: "Replace brand refreshed.png",
+  });
+  await replace.locator('input[type="file"]').setInputFiles({
+    name: "brand-new.png",
+    mimeType: "image/png",
+    buffer: Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/5QAAAABJRU5ErkJggg==",
+      "base64",
+    ),
+  });
+  await expect(replace).toBeHidden();
+  await expect(row()).toContainText("brand refreshed.png");
+  await expect(row()).toContainText("Weekly");
+  await page.goto("/playlists");
+  await page
+    .getByRole("row")
+    .filter({ hasText: "Brand loop" })
+    .getByRole("link", { name: "Edit" })
+    .click();
+  const brandPlaylistId = page.url().split("/").at(-1);
+  if (!brandPlaylistId) throw new Error("Missing Brand loop ID");
+  await expect(
+    page.getByRole("textbox", { name: "Display seconds" }),
+  ).toHaveValue("8");
+  await page.getByRole("button", { name: "Add media" }).click();
+  await page.getByRole("textbox", { name: "Filter by tags" }).click();
+  await page.getByRole("option", { name: "Weekly" }).click();
+  await expect(
+    page.getByRole("button", { name: "Add brand refreshed.png" }),
+  ).toBeVisible();
+  await page.goto("/media");
+  await row().getByRole("button", { name: "Delete" }).click();
+  const remove = page.getByRole("dialog", {
+    name: "Delete brand refreshed.png",
+  });
+  await expect(remove).toContainText("Brand loop: 1 item");
+  await expect(remove).toContainText("from existing playlists");
+  const staleSaveStatus = await page.evaluate(async (playlistId) => {
+    const auth = {
+      authorization: `Bearer ${sessionStorage.getItem("pixelpushr-admin-session")}`,
+    };
+    const listed = await fetch("/api/admin/media", { headers: auth });
+    const assets = (await listed.json()) as {
+      assets: Array<{ id: string; name: string }>;
+    };
+    const asset = assets.assets.find(
+      (item) => item.name === "brand refreshed.png",
+    );
+    if (!asset) throw new Error("Missing media asset");
+    const saved = await fetch(`/api/admin/playlists/${playlistId}/items`, {
+      method: "PUT",
+      headers: { ...auth, "content-type": "application/json" },
+      body: JSON.stringify({
+        items: [
+          { mediaAssetId: asset.id, imageDurationMs: 8000 },
+          { mediaAssetId: asset.id, imageDurationMs: 3000 },
+        ],
+      }),
+    });
+    return saved.status;
+  }, brandPlaylistId);
+  expect(staleSaveStatus).toBe(200);
+  await remove
+    .getByRole("button", { name: "Delete asset and playlist uses" })
+    .click();
+  await expect(remove).toContainText(
+    "Playlist uses changed; review deletion impact again",
+  );
+  await expect(remove).toContainText("Brand loop: 2 items");
+  await remove
+    .getByRole("button", { name: "Delete asset and playlist uses" })
+    .click();
+  await expect(remove).toBeHidden();
+  await expect(row()).toHaveCount(0);
+  await page.locator('input[type="file"]').setInputFiles({
+    name: "unused-for-delete.png",
+    mimeType: "image/png",
+    buffer: Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/5QAAAABJRU5ErkJggg==",
+      "base64",
+    ),
+  });
+  const unusedRow = page
+    .getByRole("row")
+    .filter({ hasText: "unused-for-delete.png" });
+  await expect(unusedRow).toBeVisible();
+  await unusedRow.getByRole("button", { name: "Delete" }).click();
+  const unusedDialog = page.getByRole("dialog", {
+    name: "Delete unused-for-delete.png",
+  });
+  await expect(unusedDialog).toContainText("not used by any saved playlist");
+  await unusedDialog.getByRole("button", { name: "Delete asset" }).click();
+  await expect(unusedRow).toHaveCount(0);
 });

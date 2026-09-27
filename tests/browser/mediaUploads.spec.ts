@@ -46,6 +46,8 @@ const mockMediaApi = async (
       failureReason: null,
       url: `/fake-media/${id}`,
       previewUrl: null,
+      contentVersion: id,
+      tags: [],
     };
     assets.set(id, asset);
     return route.fulfill({

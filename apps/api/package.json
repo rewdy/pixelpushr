@@ -4,11 +4,12 @@
   "type": "module",
   "scripts": {
     "dev": "bun --watch src/local.ts",
-    "build": "bun build src/lambda.ts src/migrateLambda.ts --outdir dist --target node",
+    "build": "bun build src/lambda.ts src/migrateLambda.ts src/cleanupLambda.ts --outdir dist --target node",
     "typecheck": "tsc -p tsconfig.json",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "bun src/db/migrate.ts",
-    "storage:init": "bun src/media/initFloci.ts"
+    "storage:init": "bun src/media/initFloci.ts",
+    "media:cleanup": "bun src/media/cleanupLocal.ts"
   },
   "dependencies": {
     "@aws-sdk/client-cognito-identity-provider": "^3.883.0",

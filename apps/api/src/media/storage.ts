@@ -1,4 +1,5 @@
 import {
+  CopyObjectCommand,
   DeleteObjectCommand,
   GetObjectCommand,
   HeadObjectCommand,
@@ -19,6 +20,7 @@ export type MediaStorage = {
   createUploadUrl: (key: string, mimeType: string) => Promise<string>;
   head: (key: string) => Promise<StoredObject | null>;
   readPrefix: (key: string, length: number) => Promise<Uint8Array>;
+  copy: (sourceKey: string, targetKey: string) => Promise<void>;
   writeSmall: (
     key: string,
     mimeType: string,
@@ -99,6 +101,15 @@ export const createS3Storage = (options: S3Options): MediaStorage => {
       return object.Body
         ? object.Body.transformToByteArray()
         : new Uint8Array();
+    },
+    copy: async (sourceKey, targetKey) => {
+      await client.send(
+        new CopyObjectCommand({
+          Bucket: options.bucket,
+          Key: targetKey,
+          CopySource: `${options.bucket}/${sourceKey.split("/").map(encodeURIComponent).join("/")}`,
+        }),
+      );
     },
     writeSmall: async (key, mimeType, bytes) => {
       checkSmallObjectSize(bytes);

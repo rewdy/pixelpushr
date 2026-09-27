@@ -27,6 +27,18 @@ resource "aws_s3_bucket_versioning" "media" {
   versioning_configuration { status = "Enabled" }
 }
 
+resource "aws_s3_bucket_lifecycle_configuration" "media_versions" {
+  bucket = aws_s3_bucket.media.id
+  rule {
+    id     = "expire-noncurrent-media-versions"
+    status = "Enabled"
+    filter {}
+    noncurrent_version_expiration { noncurrent_days = 8 }
+    expiration { expired_object_delete_marker = true }
+  }
+  depends_on = [aws_s3_bucket_versioning.media]
+}
+
 resource "aws_s3_bucket_server_side_encryption_configuration" "web" {
   bucket = aws_s3_bucket.web.id
   rule {

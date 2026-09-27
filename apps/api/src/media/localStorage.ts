@@ -1,5 +1,5 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
-import { mkdir } from "node:fs/promises";
+import { copyFile, mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { checkSmallObjectSize, type MediaStorage } from "./storage";
 
@@ -69,6 +69,13 @@ export const createLocalStorage = (
     },
     readPrefix: async (key, length) =>
       Bun.file(pathFor(key)).slice(0, length).bytes(),
+    copy: async (sourceKey, targetKey) => {
+      const source = pathFor(sourceKey);
+      const target = pathFor(targetKey);
+      await mkdir(join(directory, targetKey.slice(0, 36)), { recursive: true });
+      await copyFile(source, target);
+      await copyFile(`${source}.type`, `${target}.type`);
+    },
     writeSmall: async (key, mimeType, bytes) => {
       checkSmallObjectSize(bytes);
       const path = pathFor(key);

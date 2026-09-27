@@ -1,4 +1,4 @@
-import { and, asc, eq } from "drizzle-orm";
+import { and, asc, eq, inArray, sql } from "drizzle-orm";
 import type { Hono } from "hono";
 import { z } from "zod";
 import { getAdmin } from "../auth/guard";
@@ -8,6 +8,8 @@ import { firstRow } from "../db/rows";
 import {
   assignments,
   mediaAssets,
+  mediaAssetTags,
+  mediaTags,
   playlistItems,
   playlists,
 } from "../db/schema";
@@ -100,12 +102,29 @@ export const registerPlaylistRoutes = (
       .innerJoin(mediaAssets, eq(playlistItems.mediaAssetId, mediaAssets.id))
       .where(eq(playlistItems.playlistId, playlist.id))
       .orderBy(asc(playlistItems.position));
+    const ids = [...new Set(rows.map(({ asset }) => asset.id))];
+    const tagRows = ids.length
+      ? await db
+          .select({
+            mediaAssetId: mediaAssetTags.mediaAssetId,
+            id: mediaTags.id,
+            name: mediaTags.name,
+          })
+          .from(mediaAssetTags)
+          .innerJoin(mediaTags, eq(mediaAssetTags.tagId, mediaTags.id))
+          .where(inArray(mediaAssetTags.mediaAssetId, ids))
+      : [];
     return context.json({
       playlist,
       items: rows.map(({ item, asset }) => ({
         ...item,
         asset: {
           ...asset,
+          contentVersion: asset.objectKey,
+          tags: tagRows
+            .filter((tag) => tag.mediaAssetId === asset.id)
+            .map(({ id, name }) => ({ id, name }))
+            .sort((a, b) => a.name.localeCompare(b.name)),
           url:
             asset.status === "ready"
               ? storage.publicUrl(asset.objectKey)
@@ -173,6 +192,19 @@ export const registerPlaylistRoutes = (
       validatePlaylistItem(asset.kind, item);
     });
     await db.transaction(async (transaction) => {
+      for (const assetId of [
+        ...new Set(body.items.map((item) => item.mediaAssetId)),
+      ].sort()) {
+        const locked = await transaction.execute(sql`SELECT id FROM media_assets
+          WHERE id = ${assetId} AND organization_id = ${membership.organizationId}
+            AND status = 'ready' FOR SHARE`);
+        if (!locked.length)
+          throw new ApiError(
+            409,
+            "conflict",
+            "Media changed while saving playlist",
+          );
+      }
       await transaction
         .delete(playlistItems)
         .where(eq(playlistItems.playlistId, playlist.id));

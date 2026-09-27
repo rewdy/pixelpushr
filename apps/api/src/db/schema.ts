@@ -123,6 +123,70 @@ export const mediaAssets = pgTable(
   (table) => [index("media_assets_org_idx").on(table.organizationId)],
 );
 
+export const mediaReplacements = pgTable(
+  "media_replacements",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    mediaAssetId: uuid("media_asset_id")
+      .notNull()
+      .references(() => mediaAssets.id, { onDelete: "cascade" }),
+    objectKey: text("object_key").notNull().unique(),
+    originalObjectKey: text("original_object_key").notNull(),
+    mimeType: varchar("mime_type", { length: 100 }).notNull(),
+    sizeBytes: integer("size_bytes").notNull(),
+    status: mediaStatus("status").notNull().default("pending"),
+    failureReason: text("failure_reason"),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [index("media_replacements_asset_idx").on(table.mediaAssetId)],
+);
+
+export const retiredMediaObjects = pgTable(
+  "retired_media_objects",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    objectKey: text("object_key").notNull().unique(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [index("retired_media_objects_expiry_idx").on(table.expiresAt)],
+);
+
+export const mediaTags = pgTable(
+  "media_tags",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    name: varchar("name", { length: 60 }).notNull(),
+    normalizedName: varchar("normalized_name", { length: 60 }).notNull(),
+  },
+  (table) => [
+    uniqueIndex("media_tags_org_normalized_unique").on(
+      table.organizationId,
+      table.normalizedName,
+    ),
+  ],
+);
+
+export const mediaAssetTags = pgTable(
+  "media_asset_tags",
+  {
+    mediaAssetId: uuid("media_asset_id")
+      .notNull()
+      .references(() => mediaAssets.id, { onDelete: "cascade" }),
+    tagId: uuid("tag_id")
+      .notNull()
+      .references(() => mediaTags.id, { onDelete: "cascade" }),
+  },
+  (table) => [primaryKey({ columns: [table.mediaAssetId, table.tagId] })],
+);
+
 export const playlists = pgTable(
   "playlists",
   {

@@ -7,6 +7,7 @@ import {
   Divider,
   Drawer,
   Group,
+  MultiSelect,
   NumberInput,
   Paper,
   ScrollArea,
@@ -23,6 +24,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { LuArrowDown, LuArrowUp, LuPlus, LuTrash2 } from "react-icons/lu";
 import { useParams } from "wouter";
 import { requestJson } from "../../helpers/api";
+import { filterMediaAssets } from "../../helpers/mediaFilters";
 import {
   applyBulkDuration,
   type DraftItem,
@@ -49,9 +51,13 @@ type MediaPickerProps = {
 
 const MediaPicker = ({ assets, onAdd }: MediaPickerProps) => {
   const [filter, setFilter] = useState("");
-  const filtered = assets.filter((asset) =>
-    asset.name.toLocaleLowerCase().includes(filter.toLocaleLowerCase()),
-  );
+  const [tagIds, setTagIds] = useState<string[]>([]);
+  const tags = [
+    ...new Map(
+      assets.flatMap((asset) => asset.tags.map((tag) => [tag.id, tag])),
+    ).values(),
+  ].sort((a, b) => a.name.localeCompare(b.name));
+  const filtered = filterMediaAssets(assets, filter, tagIds);
   return (
     <Stack gap="md">
       <TextInput
@@ -59,6 +65,14 @@ const MediaPicker = ({ assets, onAdd }: MediaPickerProps) => {
         placeholder="Search images and videos"
         value={filter}
         onChange={(event) => setFilter(event.currentTarget.value)}
+      />
+      <MultiSelect
+        label="Filter by tags"
+        placeholder="Any selected tag"
+        data={tags.map((tag) => ({ value: tag.id, label: tag.name }))}
+        value={tagIds}
+        onChange={setTagIds}
+        clearable
       />
       <ScrollArea.Autosize mah="65vh" type="auto">
         <Stack gap="sm" pr="xs">

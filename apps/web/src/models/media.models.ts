@@ -1,17 +1,6 @@
-export type MediaAsset = {
-  id: string;
-  name: string;
-  kind: "image" | "video";
-  status: "pending" | "ready" | "failed";
-  mimeType: string;
-  sizeBytes: number;
-  width: number | null;
-  height: number | null;
-  durationMs: number | null;
-  failureReason: string | null;
-  url: string | null;
-  previewUrl: string | null;
-};
+import type { MediaAsset } from "@pixelpushr/contracts/media";
+
+export type { MediaAsset } from "@pixelpushr/contracts/media";
 
 export type Playlist = {
   id: string;

@@ -418,10 +418,14 @@ describe("first-run organization setup", () => {
       headers: { ...headers, "content-type": "application/json" },
       body: JSON.stringify({ width: 640, height: 360, durationMs: 5000 }),
     });
-    expect(
-      ((await completed.json()) as { asset: { previewUrl: string | null } })
-        .asset.previewUrl,
-    ).toBeNull();
+    const completedAsset = (await completed.json()) as {
+      asset: { previewUrl: string | null; contentVersion: string };
+    };
+    expect(completedAsset.asset.previewUrl).toBeNull();
+    const versionHeaders = {
+      ...headers,
+      "x-media-version": completedAsset.asset.contentVersion,
+    };
     const playlist = await app.request("/admin/playlists", {
       method: "POST",
       headers: { ...headers, "content-type": "application/json" },
@@ -484,7 +488,7 @@ describe("first-run organization setup", () => {
       (
         await app.request(endpoint, {
           method: "PUT",
-          headers: { ...headers, "content-type": "image/png" },
+          headers: { ...versionHeaders, "content-type": "image/png" },
           body: jpeg,
         })
       ).status,
@@ -493,7 +497,7 @@ describe("first-run organization setup", () => {
       (
         await app.request(endpoint, {
           method: "PUT",
-          headers: { ...headers, "content-type": "image/jpeg" },
+          headers: { ...versionHeaders, "content-type": "image/jpeg" },
           body: new Uint8Array([1, 2, 3]),
         })
       ).status,
@@ -502,14 +506,14 @@ describe("first-run organization setup", () => {
       (
         await app.request(endpoint, {
           method: "PUT",
-          headers: { ...headers, "content-type": "image/jpeg" },
+          headers: { ...versionHeaders, "content-type": "image/jpeg" },
           body: new Uint8Array(1024 * 1024 + 1),
         })
       ).status,
     ).toBe(413);
     const thumbnail = await app.request(endpoint, {
       method: "PUT",
-      headers: { ...headers, "content-type": "image/jpeg" },
+      headers: { ...versionHeaders, "content-type": "image/jpeg" },
       body: jpeg,
     });
     expect(thumbnail.status).toBe(200);
@@ -549,7 +553,7 @@ describe("first-run organization setup", () => {
         })
       ).status,
     ).toBe(200);
-    expect(await mediaStorage.head(thumbAsset.thumbnailKey)).toBeNull();
+    expect(await mediaStorage.head(thumbAsset.thumbnailKey)).not.toBeNull();
   });
 
   test("playlist item order and playback settings survive reload", async () => {

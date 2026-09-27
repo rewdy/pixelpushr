@@ -59,6 +59,10 @@ resource "aws_cloudwatch_log_group" "migrate" {
   name              = "/aws/lambda/${local.name}-migrate"
   retention_in_days = 14
 }
+resource "aws_cloudwatch_log_group" "media_cleanup" {
+  name              = "/aws/lambda/${local.name}-media-cleanup"
+  retention_in_days = 14
+}
 
 locals {
   lambda_environment = {
@@ -111,6 +115,41 @@ resource "aws_lambda_function" "migrate" {
     security_group_ids = [aws_security_group.lambda.id]
   }
   depends_on = [aws_iam_role_policy_attachment.basic, aws_iam_role_policy_attachment.vpc, aws_iam_role_policy.app, aws_cloudwatch_log_group.migrate]
+}
+
+resource "aws_lambda_function" "media_cleanup" {
+  function_name    = "${local.name}-media-cleanup"
+  filename         = var.lambda_zip_path
+  source_code_hash = filebase64sha256(var.lambda_zip_path)
+  handler          = "cleanupLambda.handler"
+  runtime          = "nodejs22.x"
+  role             = aws_iam_role.lambda.arn
+  timeout          = 120
+  memory_size      = 512
+  environment { variables = local.lambda_environment }
+  vpc_config {
+    subnet_ids         = aws_subnet.private[*].id
+    security_group_ids = [aws_security_group.lambda.id]
+  }
+  depends_on = [aws_iam_role_policy_attachment.basic, aws_iam_role_policy_attachment.vpc, aws_iam_role_policy.app, aws_cloudwatch_log_group.media_cleanup]
+}
+
+resource "aws_cloudwatch_event_rule" "media_cleanup" {
+  name                = "${local.name}-media-cleanup"
+  schedule_expression = "rate(1 day)"
+}
+
+resource "aws_cloudwatch_event_target" "media_cleanup" {
+  rule = aws_cloudwatch_event_rule.media_cleanup.name
+  arn  = aws_lambda_function.media_cleanup.arn
+}
+
+resource "aws_lambda_permission" "media_cleanup_schedule" {
+  statement_id  = "AllowScheduledCleanup"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.media_cleanup.function_name
+  principal     = "events.amazonaws.com"
+  source_arn    = aws_cloudwatch_event_rule.media_cleanup.arn
 }
 
 resource "aws_apigatewayv2_api" "api" {

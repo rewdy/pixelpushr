@@ -14,6 +14,7 @@ test("Floci S3 supports presigned upload and public media delivery", async () =>
     secretAccessKey: "test",
   });
   const key = `${crypto.randomUUID()}/${crypto.randomUUID()}`;
+  const copiedKey = `${key.slice(0, 36)}/${crypto.randomUUID()}`;
   const bytes = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10, 1, 2, 3]);
   try {
     const uploadUrl = await storage.createUploadUrl(key, "image/png");
@@ -28,10 +29,17 @@ test("Floci S3 supports presigned upload and public media delivery", async () =>
       mimeType: "image/png",
     });
     expect(await storage.readPrefix(key, 8)).toEqual(bytes.slice(0, 8));
+    await storage.copy(key, copiedKey);
+    expect(await storage.head(copiedKey)).toEqual({
+      sizeBytes: bytes.byteLength,
+      mimeType: "image/png",
+    });
+    expect(await storage.readPrefix(copiedKey, 8)).toEqual(bytes.slice(0, 8));
     const publicResponse = await fetch(storage.publicUrl(key));
     expect(publicResponse.status).toBe(200);
   } finally {
     await storage.remove(key);
+    await storage.remove(copiedKey);
   }
 });
 
