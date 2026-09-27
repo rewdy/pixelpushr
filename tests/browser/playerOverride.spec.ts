@@ -91,10 +91,10 @@ test("override cuts in and expires on server time, including an offline reload",
   });
   online = false;
   await page.reload();
-  await page.keyboard.press("d");
   await expect(
     page.locator('img[data-player-layer="current"][src^="blob:"]'),
   ).toBeVisible();
+  await page.keyboard.press("d");
   await expect(page.getByText(/offline · countdown ·/)).toBeVisible();
   await expect(page.getByText(/offline · brand ·/)).toBeVisible({
     timeout: 7000,

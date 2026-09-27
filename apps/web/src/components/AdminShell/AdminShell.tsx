@@ -16,7 +16,6 @@ import { useDisclosure } from "@mantine/hooks";
 import type { ReactNode } from "react";
 import { IoPlay } from "react-icons/io5";
 import {
-  LuCalendarDays,
   LuFolder,
   LuLayoutDashboard,
   LuList,
@@ -24,7 +23,6 @@ import {
   LuMonitor,
   LuSettings,
   LuUsers,
-  LuZap,
 } from "react-icons/lu";
 import { Link, useLocation } from "wouter";
 import { setToken } from "../../helpers/api";
@@ -43,13 +41,6 @@ const sections = [
       { href: "/media", label: "Media library", icon: LuFolder },
       { href: "/playlists", label: "Playlists", icon: LuList },
       { href: "/displays", label: "Displays", icon: LuMonitor },
-    ],
-  },
-  {
-    label: "Playback",
-    links: [
-      { href: "/schedules", label: "Schedules", icon: LuCalendarDays },
-      { href: "/overrides", label: "Overrides", icon: LuZap },
     ],
   },
   {

@@ -1,12 +1,4 @@
-import {
-  Alert,
-  Center,
-  Container,
-  Loader,
-  Stack,
-  Text,
-  Title,
-} from "@mantine/core";
+import { Alert, Center, Container, Loader, Title } from "@mantine/core";
 import { useQuery } from "@tanstack/react-query";
 import { Redirect, Route, Switch } from "wouter";
 import { AdminShell } from "./components/AdminShell/AdminShell";
@@ -22,6 +14,7 @@ import {
 } from "./components/DisplaysPage/DisplaysPage";
 import { InviteScreen } from "./components/InviteScreen/InviteScreen";
 import { MediaPage } from "./components/MediaPage/MediaPage";
+import { OverviewPage } from "./components/OverviewPage/OverviewPage";
 import { PeoplePage } from "./components/PeoplePage/PeoplePage";
 import { PlayerPage } from "./components/PlayerPage/PlayerPage";
 import { PlaylistEditorPage } from "./components/PlaylistsPage/PlaylistEditorPage";
@@ -34,20 +27,6 @@ type MeResponse = {
   membership: { role: "owner" | "admin" };
   organization: { name: string; timezone: string };
 };
-
-const Home = () => (
-  <Container fluid>
-    <Stack>
-      <Text size="xs" c="dimmed" tt="uppercase" ff="monospace">
-        Workspace
-      </Text>
-      <Title>Overview</Title>
-      <Text c="dimmed">
-        Your signage workspace is ready. Add media and playlists to get started.
-      </Text>
-    </Stack>
-  </Container>
-);
 
 const AdminGate = () => {
   const token = getToken();
@@ -93,7 +72,7 @@ const AdminGate = () => {
       organizationName={me.data.organization.name}
     >
       <Switch>
-        <Route path="/" component={Home} />
+        <Route path="/" component={OverviewPage} />
         <Route path="/media" component={MediaPage} />
         <Route path="/playlists/:id" component={PlaylistEditorPage} />
         <Route path="/playlists" component={PlaylistsPage} />

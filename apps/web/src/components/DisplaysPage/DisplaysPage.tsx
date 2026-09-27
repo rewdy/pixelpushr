@@ -24,16 +24,9 @@ import {
 import { Link, useParams } from "wouter";
 import { requestJson } from "../../helpers/api";
 import type { Playlist } from "../../models/media.models";
-import { OverrideAssignments } from "./OverrideAssignments";
-import { type Assignment, ScheduledAssignments } from "./ScheduledAssignments";
-
-type Display = {
-  id: string;
-  name: string;
-  playerUrl: string;
-  lastSeenAt: string | null;
-  lastHealth: string | null;
-};
+import { AddPlaylistDrawer } from "./AddPlaylistDrawer";
+import type { Assignment, Display } from "./assignment.models";
+import { ScheduleTimePreview } from "./ScheduleTimePreview";
 
 /** Registers displays and exposes each public browser player URL. */
 export const DisplaysPage = () => {
@@ -179,7 +172,7 @@ export const DisplaysPage = () => {
   );
 };
 
-/** Orders always-active playlists for one display. */
+/** Manages all assignment modes for one display. */
 export const DisplayEditorPage = () => {
   const { id } = useParams<{ id: string }>();
   const queryClient = useQueryClient();
@@ -199,6 +192,12 @@ export const DisplayEditorPage = () => {
     queryKey: ["playlists"],
     queryFn: () => requestJson<{ playlists: Playlist[] }>("/admin/playlists"),
   });
+  const me = useQuery({
+    queryKey: ["display-workspace-timezone"],
+    queryFn: () =>
+      requestJson<{ organization: { timezone: string } }>("/admin/me"),
+  });
+  const [drawerOpen, setDrawerOpen] = useState(false);
   const [always, setAlways] = useState<string[]>([]);
   useEffect(() => {
     if (assignments.data)
@@ -210,16 +209,58 @@ export const DisplayEditorPage = () => {
       );
   }, [assignments.data]);
   const save = useMutation({
-    mutationFn: () =>
+    mutationFn: (playlistIds: string[]) =>
       requestJson(`/admin/displays/${id}/always`, {
         method: "PUT",
-        body: JSON.stringify({ playlistIds: always }),
+        body: JSON.stringify({ playlistIds }),
       }),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["assignments", id] });
     },
   });
+  const remove = useMutation({
+    mutationFn: async (item: Assignment) => {
+      if (item.mode === "always") {
+        const latest = await requestJson<{ assignments: Assignment[] }>(
+          `/admin/displays/${id}/assignments`,
+        );
+        const playlistIds = latest.assignments
+          .filter(
+            (assignment) =>
+              assignment.mode === "always" && assignment.id !== item.id,
+          )
+          .sort((a, b) => a.position - b.position)
+          .map((assignment) => assignment.playlistId);
+        return requestJson(`/admin/displays/${id}/always`, {
+          method: "PUT",
+          body: JSON.stringify({ playlistIds }),
+        });
+      }
+      const kind = item.mode === "scheduled" ? "schedules" : "overrides";
+      return requestJson(`/admin/displays/${id}/${kind}/${item.id}`, {
+        method: "DELETE",
+      });
+    },
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["assignments", id] });
+    },
+  });
   const display = displays.data?.displays.find((item) => item.id === id);
+  const items = assignments.data?.assignments ?? [];
+  const orderedAlways = always.flatMap((playlistId) => {
+    const item = items.find(
+      (entry) => entry.mode === "always" && entry.playlistId === playlistId,
+    );
+    return item ? [item] : [];
+  });
+  const orderedOther = items
+    .filter((item) => item.mode !== "always")
+    .sort((a, b) => a.mode.localeCompare(b.mode) || a.position - b.position);
+  const savedAlways = items
+    .filter((item) => item.mode === "always")
+    .sort((a, b) => a.position - b.position)
+    .map((item) => item.playlistId);
+  const orderChanged = always.join("|") !== savedAlways.join("|");
   const move = (position: number, offset: number) =>
     setAlways((previous) => {
       const copy = [...previous];
@@ -239,7 +280,8 @@ export const DisplayEditorPage = () => {
         </Text>
         <Title>{display?.name ?? "Display"}</Title>
         <Text c="dimmed">
-          Always and active scheduled playlists cycle together in order.
+          Always-on and active Append playlists cycle together. An active
+          Override plays alone.
         </Text>
       </Stack>
       {display && (
@@ -265,100 +307,135 @@ export const DisplayEditorPage = () => {
       )}
       <Paper withBorder p="lg">
         <Stack>
-          <Title order={3}>Always-active playlists</Title>
-          {always.map((playlistId, position) => (
-            <Paper key={playlistId} withBorder p="sm">
-              <Group justify="space-between">
-                <Group>
-                  <Badge variant="light" color="gray">
-                    {position + 1}
-                  </Badge>
-                  <Text fw={600}>
-                    {playlists.data?.playlists.find(
-                      (item) => item.id === playlistId,
-                    )?.name ?? "Playlist"}
-                  </Text>
-                </Group>
-                <Group gap="xs">
-                  <ActionIcon
-                    variant="subtle"
-                    color="gray"
-                    aria-label={`Move playlist ${position + 1} up`}
-                    disabled={position === 0}
-                    onClick={() => move(position, -1)}
-                  >
-                    <LuArrowUp size={16} />
-                  </ActionIcon>
-                  <ActionIcon
-                    variant="subtle"
-                    color="gray"
-                    aria-label={`Move playlist ${position + 1} down`}
-                    disabled={position === always.length - 1}
-                    onClick={() => move(position, 1)}
-                  >
-                    <LuArrowDown size={16} />
-                  </ActionIcon>
-                  <ActionIcon
-                    variant="subtle"
-                    color="red"
-                    aria-label={`Remove playlist ${position + 1}`}
-                    onClick={() =>
-                      setAlways((previous) =>
-                        previous.filter((_, index) => index !== position),
-                      )
-                    }
-                  >
-                    <LuTrash2 size={16} />
-                  </ActionIcon>
-                </Group>
-              </Group>
-            </Paper>
-          ))}
-          {playlists.data?.playlists
-            .filter((playlist) => !always.includes(playlist.id))
-            .map((playlist) => (
-              <Button
-                key={playlist.id}
-                variant="subtle"
-                leftSection={<LuPlus size={15} />}
-                style={{ alignSelf: "flex-start" }}
-                onClick={() =>
-                  setAlways((previous) => [...previous, playlist.id])
-                }
-              >
-                Add {playlist.name}
-              </Button>
-            ))}
-          {always.length === 0 && (
-            <Text size="sm" c="dimmed">
-              No playlists assigned. The player will wait until you add one.
-            </Text>
-          )}
-          {save.error && <Alert color="red">{save.error.message}</Alert>}
-          {save.isSuccess && (
-            <Alert color="signal">
-              Assignments saved. The player will pick them up shortly.
-            </Alert>
-          )}
-          <Group justify="flex-end">
-            <Button loading={save.isPending} onClick={() => save.mutate()}>
-              Save assignments
+          <Group justify="space-between">
+            <Title order={3}>Assigned playlists</Title>
+            <Button
+              leftSection={<LuPlus size={16} />}
+              onClick={() => setDrawerOpen(true)}
+            >
+              Add playlist
             </Button>
           </Group>
+          {[...orderedAlways, ...orderedOther].map((item) => {
+            const position =
+              item.mode === "always" ? always.indexOf(item.playlistId) : -1;
+            const schedule = item.schedule;
+            return (
+              <Paper key={item.id} withBorder p="sm">
+                <Group justify="space-between" align="center" wrap="wrap">
+                  <Stack gap={3}>
+                    <Group gap="xs">
+                      <Text fw={600}>{item.playlistName}</Text>
+                      <Badge
+                        variant="light"
+                        color={
+                          item.mode === "override"
+                            ? "red"
+                            : item.mode === "scheduled"
+                              ? "brand"
+                              : "gray"
+                        }
+                      >
+                        {item.mode === "always"
+                          ? "Always-on"
+                          : item.mode === "scheduled"
+                            ? "Append"
+                            : "Override"}
+                      </Badge>
+                      {item.mode === "override" && (
+                        <Badge variant="light">Priority {item.priority}</Badge>
+                      )}
+                    </Group>
+                    <Text size="xs" c="dimmed">
+                      {schedule
+                        ? `${new Date(schedule.startAt).toLocaleString("en-US", { timeZone: schedule.timezone })} → ${new Date(schedule.endAt).toLocaleString("en-US", { timeZone: schedule.timezone })} · ${schedule.timezone}${schedule.recurrence === "weekly" ? ` · Every ${schedule.weekInterval ?? 1} week(s)` : ""}`
+                        : `Always active · Position ${position + 1}`}
+                    </Text>
+                  </Stack>
+                  <Group gap="xs">
+                    {position >= 0 && (
+                      <>
+                        <ActionIcon
+                          variant="subtle"
+                          color="gray"
+                          aria-label={`Move ${item.playlistName} up`}
+                          disabled={position === 0}
+                          onClick={() => move(position, -1)}
+                        >
+                          <LuArrowUp size={16} />
+                        </ActionIcon>
+                        <ActionIcon
+                          variant="subtle"
+                          color="gray"
+                          aria-label={`Move ${item.playlistName} down`}
+                          disabled={position === always.length - 1}
+                          onClick={() => move(position, 1)}
+                        >
+                          <LuArrowDown size={16} />
+                        </ActionIcon>
+                      </>
+                    )}
+                    <ActionIcon
+                      variant="subtle"
+                      color="red"
+                      aria-label={`Remove ${item.playlistName} ${item.mode}`}
+                      disabled={remove.isPending || orderChanged}
+                      onClick={() => remove.mutate(item)}
+                    >
+                      <LuTrash2 size={16} />
+                    </ActionIcon>
+                  </Group>
+                </Group>
+              </Paper>
+            );
+          })}
+          {items.length === 0 && (
+            <Text c="dimmed">
+              No playlists assigned. Add one to start playback.
+            </Text>
+          )}
+          {orderChanged && (
+            <Text size="sm" c="dimmed">
+              Save the always-on order before removing assignments.
+            </Text>
+          )}
+          {(save.error || remove.error) && (
+            <Alert color="red">
+              {save.error?.message ?? remove.error?.message}
+            </Alert>
+          )}
+          {orderChanged && (
+            <Group justify="flex-end">
+              <Button
+                loading={save.isPending}
+                onClick={() => save.mutate(always)}
+              >
+                Save always-on order
+              </Button>
+            </Group>
+          )}
         </Stack>
       </Paper>
       {id && (
-        <ScheduledAssignments
+        <ScheduleTimePreview
           displayId={id}
-          assignments={assignments.data?.assignments ?? []}
+          timezone={me.data?.organization.timezone ?? "organization timezone"}
           playlists={playlists.data?.playlists ?? []}
         />
       )}
       {id && (
-        <OverrideAssignments
+        <AddPlaylistDrawer
+          opened={drawerOpen}
+          onClose={() => setDrawerOpen(false)}
+          onSaved={() =>
+            void queryClient.invalidateQueries({
+              queryKey: ["assignments", id],
+            })
+          }
           displayId={id}
-          assignments={assignments.data?.assignments ?? []}
           playlists={playlists.data?.playlists ?? []}
+          timezone={me.data?.organization.timezone ?? "organization timezone"}
+          assignments={items}
         />
       )}
     </Stack>

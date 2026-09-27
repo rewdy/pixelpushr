@@ -348,11 +348,15 @@ test("upload media and publish an ordered playlist through the real API", async 
   await page.getByRole("button", { name: "Register display" }).click();
   await expect(page.getByText("Lobby TV")).toBeVisible();
   await page.getByRole("link", { name: "Assign playlists" }).click();
-  await page.getByRole("button", { name: "Add Brand loop" }).click();
-  await page.getByRole("button", { name: "Save assignments" }).click();
-  await expect(
-    page.getByText("Assignments saved. The player will pick them up shortly."),
-  ).toBeVisible();
+  await page.getByRole("button", { name: "Add playlist" }).click();
+  const drawer = page.getByRole("dialog", { name: "Add playlist" });
+  await expect(drawer.getByRole("radio", { name: "Always-on" })).toBeChecked();
+  await expect(drawer.getByRole("textbox", { name: "Start" })).toHaveCount(0);
+  await drawer.getByRole("textbox", { name: "Playlist" }).click();
+  await page.getByRole("option", { name: "Brand loop" }).click();
+  await drawer.getByRole("button", { name: "Add playlist" }).click();
+  await expect(drawer).toBeHidden();
+  await expect(page.getByText("Always active · Position 1")).toBeVisible();
   const playerUrl = await page
     .getByRole("link", { name: "Open player" })
     .getAttribute("href");
@@ -378,35 +382,92 @@ test("upload media and publish an ordered playlist through the real API", async 
   await page.getByRole("button", { name: "Save playlist" }).click();
   await page.goto("/displays");
   await page.getByRole("link", { name: "Assign playlists" }).click();
-  await page.getByRole("textbox", { name: "Playlist", exact: true }).click();
+  await page.getByRole("button", { name: "Add playlist" }).click();
+  const scheduledDrawer = page.getByRole("dialog", { name: "Add playlist" });
+  await scheduledDrawer.getByRole("radio", { name: "Scheduled" }).check();
+  await expect(
+    scheduledDrawer.getByRole("radio", { name: "Append" }),
+  ).toBeChecked();
+  await expect(
+    scheduledDrawer.getByRole("checkbox", { name: "Activate now" }),
+  ).toHaveCount(0);
+  await scheduledDrawer.getByRole("textbox", { name: "Playlist" }).click();
   await page.getByRole("option", { name: "Weekly campaign" }).click();
-  await page
+  await scheduledDrawer
     .getByRole("textbox", { name: "Start", exact: true })
     .fill("2026-09-07T00:00");
-  await page
+  await scheduledDrawer
+    .getByRole("textbox", { name: "End", exact: true })
+    .fill("2026-09-06T00:00");
+  await scheduledDrawer.getByRole("button", { name: "Add playlist" }).click();
+  await expect(
+    scheduledDrawer.getByText("Schedule end must be after start."),
+  ).toBeVisible();
+  await scheduledDrawer
     .getByRole("textbox", { name: "End", exact: true })
     .fill("2026-09-14T00:00");
-  await page.getByRole("textbox", { name: "Repeat", exact: true }).click();
+  await scheduledDrawer
+    .getByRole("textbox", { name: "Repeat", exact: true })
+    .click();
   await page.getByRole("option", { name: "Every N weeks" }).click();
-  await page.getByRole("textbox", { name: "Repeat every (weeks)" }).fill("3");
-  await page.getByRole("button", { name: "Add schedule" }).click();
-  await expect(page.getByText("Schedule saved.")).toBeVisible();
+  await scheduledDrawer
+    .getByRole("textbox", { name: "Repeat every (weeks)" })
+    .fill("3");
+  await scheduledDrawer.getByRole("button", { name: "Add playlist" }).click();
+  await expect(scheduledDrawer).toBeHidden();
+  await expect(page.getByText("Append", { exact: true })).toBeVisible();
   await page
     .getByRole("textbox", { name: "Preview at" })
     .fill("2026-09-08T12:00");
   await page.getByRole("button", { name: "Preview", exact: true }).click();
   await expect(page.getByText("Brand loop → Weekly campaign")).toBeVisible();
-  await page.getByRole("textbox", { name: "Override playlist" }).click();
-  await page.getByRole("option", { name: "Weekly campaign" }).click();
-  await page.getByRole("checkbox", { name: "Activate now" }).check();
-  await page
-    .getByRole("textbox", { name: "Override expiration" })
-    .fill("2099-01-01T00:00");
-  await page.getByRole("button", { name: "Save override" }).click();
+  await page.getByRole("button", { name: "Add playlist" }).click();
+  const overrideDrawer = page.getByRole("dialog", { name: "Add playlist" });
+  await overrideDrawer.getByRole("radio", { name: "Scheduled" }).check();
+  await overrideDrawer.getByRole("radio", { name: "Override" }).check();
   await expect(
-    page.getByText(
-      "Override saved. Players will pick it up on their next refresh.",
-    ),
+    overrideDrawer.getByRole("textbox", { name: "Repeat" }),
+  ).toHaveCount(0);
+  await overrideDrawer.getByRole("textbox", { name: "Playlist" }).click();
+  await page.getByRole("option", { name: "Weekly campaign" }).click();
+  await overrideDrawer.getByRole("checkbox", { name: "Activate now" }).check();
+  await expect(
+    overrideDrawer.getByRole("textbox", { name: "Start" }),
+  ).toHaveCount(0);
+  await overrideDrawer
+    .getByRole("textbox", { name: "Expiration" })
+    .fill("2099-01-01T00:00");
+  await overrideDrawer.getByRole("button", { name: "Add playlist" }).click();
+  await expect(page.getByText("Override", { exact: true })).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: /Remove .* always/ }),
+  ).toHaveCount(1);
+  await expect(
+    page.getByRole("button", { name: /Remove .* scheduled/ }),
+  ).toHaveCount(1);
+  await expect(
+    page.getByRole("button", { name: /Remove .* override/ }),
+  ).toHaveCount(1);
+  await page.getByRole("button", { name: /Remove .* override/ }).click();
+  await expect(
+    page.getByRole("button", { name: /Remove .* override/ }),
+  ).toHaveCount(0);
+  await expect(
+    page.getByRole("button", { name: /Remove .* scheduled/ }),
+  ).toHaveCount(1);
+  await expect(
+    page.getByRole("button", { name: /Remove .* always/ }),
+  ).toHaveCount(1);
+  await page.getByRole("button", { name: /Remove .* scheduled/ }).click();
+  await expect(
+    page.getByRole("button", { name: /Remove .* scheduled/ }),
+  ).toHaveCount(0);
+  await expect(
+    page.getByRole("button", { name: /Remove .* always/ }),
+  ).toHaveCount(1);
+  await page.getByRole("button", { name: /Remove .* always/ }).click();
+  await expect(
+    page.getByText("No playlists assigned. Add one to start playback."),
   ).toBeVisible();
 });
 

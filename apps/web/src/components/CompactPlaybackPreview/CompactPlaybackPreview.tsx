@@ -22,10 +22,15 @@ export type PreviewItem = {
 type Props = {
   items: PreviewItem[];
   structureKey: string;
+  videoPresentation?: "play" | "still";
 };
 
 /** Plays a local, compact queue without manifest, heartbeat, or device sync. */
-export const CompactPlaybackPreview = ({ items, structureKey }: Props) => {
+export const CompactPlaybackPreview = ({
+  items,
+  structureKey,
+  videoPresentation = "play",
+}: Props) => {
   const [index, setIndex] = useState(0);
   const [cycle, setCycle] = useState(0);
   const [elapsedMs, setElapsedMs] = useState(0);
@@ -38,9 +43,11 @@ export const CompactPlaybackPreview = ({ items, structureKey }: Props) => {
   const duration =
     item?.kind === "image"
       ? item.imageDurationMs
-      : item?.videoMode === "repeat"
-        ? item.repeatDurationMs
-        : null;
+      : videoPresentation === "still"
+        ? (item?.repeatDurationMs ?? 8000)
+        : item?.videoMode === "repeat"
+          ? item.repeatDurationMs
+          : null;
   const advance = useCallback(() => {
     setIndex((current) => (items.length ? (current + 1) % items.length : 0));
     setCycle((current) => current + 1);
@@ -109,12 +116,20 @@ export const CompactPlaybackPreview = ({ items, structureKey }: Props) => {
               key={`${item.id}:${cycle}`}
               ref={videoRef}
               src={item.url}
-              autoPlay
+              autoPlay={videoPresentation === "play"}
+              preload={videoPresentation === "still" ? "metadata" : "auto"}
               muted
               playsInline
               className={classes.media}
               data-testid="preview-media"
               onError={advance}
+              onLoadedMetadata={(event) => {
+                if (
+                  videoPresentation === "still" &&
+                  event.currentTarget.duration > 0.1
+                )
+                  event.currentTarget.currentTime = 0.1;
+              }}
               onTimeUpdate={(event) => {
                 const video = event.currentTarget;
                 if (item.videoMode === "once")
@@ -128,6 +143,7 @@ export const CompactPlaybackPreview = ({ items, structureKey }: Props) => {
                   );
               }}
               onEnded={(event) => {
+                if (videoPresentation === "still") return;
                 if (item.videoMode === "repeat") {
                   event.currentTarget.currentTime = 0;
                   void event.currentTarget.play().catch(advance);
