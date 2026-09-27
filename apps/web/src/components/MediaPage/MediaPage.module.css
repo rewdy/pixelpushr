@@ -1,0 +1,10 @@
+.dropOverlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: grid;
+  place-items: center;
+  padding: var(--mantine-spacing-xl);
+  background: color-mix(in srgb, var(--mantine-color-body) 86%, transparent);
+  pointer-events: none;
+}

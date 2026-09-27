@@ -227,7 +227,12 @@ test("video uploads get a poster when possible and stay ready when poster upload
     mimeType: "video/mp4",
     buffer: video,
   });
-  await expect(page.getByText("Media is ready for playlists.")).toBeVisible();
+  await expect(
+    page
+      .getByTestId("upload-entry")
+      .filter({ hasText: "fallback-video.mp4" })
+      .getByText("ready"),
+  ).toBeVisible();
   const fallback = await page.evaluate(async () => {
     const response = await fetch("/api/admin/media", {
       headers: {
@@ -244,6 +249,46 @@ test("video uploads get a poster when possible and stay ready when poster upload
     status: "ready",
     previewUrl: null,
   });
+});
+
+test("a mixed picker batch keeps successful image and video uploads when one file is rejected", async ({
+  page,
+}) => {
+  await page.addInitScript(
+    (accessToken) =>
+      sessionStorage.setItem("pixelpushr-admin-session", accessToken),
+    token,
+  );
+  await page.goto("/media");
+  const png = Buffer.from(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/5QAAAABJRU5ErkJggg==",
+    "base64",
+  );
+  await page.locator('input[type="file"]').setInputFiles([
+    { name: "batch-image.png", mimeType: "image/png", buffer: png },
+    {
+      name: "batch-video.mp4",
+      mimeType: "video/mp4",
+      buffer: Buffer.from(videoBase64, "base64"),
+    },
+    {
+      name: "unsupported.txt",
+      mimeType: "text/plain",
+      buffer: Buffer.from("not media"),
+    },
+  ]);
+  const entry = (name: string) =>
+    page.getByTestId("upload-entry").filter({ hasText: name });
+  await expect(entry("batch-image.png").getByText("ready")).toBeVisible();
+  await expect(entry("batch-video.mp4").getByText("ready")).toBeVisible();
+  await expect(entry("unsupported.txt").getByText("failed")).toBeVisible();
+  await expect(entry("unsupported.txt")).toContainText("Unsupported file type");
+  await expect(
+    page.getByRole("row").filter({ hasText: "batch-image.png" }),
+  ).toContainText("ready");
+  await expect(
+    page.getByRole("row").filter({ hasText: "batch-video.mp4" }),
+  ).toContainText("ready");
 });
 
 test("upload media and publish an ordered playlist through the real API", async ({

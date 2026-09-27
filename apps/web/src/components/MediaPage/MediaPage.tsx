@@ -10,82 +10,55 @@ import {
   Text,
   Title,
 } from "@mantine/core";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
+import { useEffect, useState } from "react";
 import { LuUpload } from "react-icons/lu";
 import { requestJson } from "../../helpers/api";
-import {
-  captureVideoThumbnail,
-  readMediaPreview,
-} from "../../helpers/mediaPreview";
+import { useMediaUploadQueue } from "../../hooks/useMediaUploadQueue";
 import type { MediaAsset } from "../../models/media.models";
 import { MediaThumbnail } from "../MediaThumbnail/MediaThumbnail";
+import classes from "./MediaPage.module.css";
 
-/** Uploads image/video assets and displays their processing state. */
+/** Accepts image/video batches from the picker or a page-wide drop target. */
 export const MediaPage = () => {
-  const queryClient = useQueryClient();
   const assets = useQuery({
     queryKey: ["media"],
     queryFn: () => requestJson<{ assets: MediaAsset[] }>("/admin/media"),
   });
-  const upload = useMutation({
-    mutationFn: async (file: File) => {
-      const created = await requestJson<{
-        asset: MediaAsset;
-        uploadUrl: string | null;
-      }>("/admin/media/uploads", {
-        method: "POST",
-        body: JSON.stringify({
-          name: file.name,
-          mimeType: file.type || "application/octet-stream",
-          sizeBytes: file.size,
-        }),
-      });
-      if (!created.uploadUrl)
-        throw new Error(created.asset.failureReason ?? "Unsupported file");
-      const response = await fetch(created.uploadUrl, {
-        method: "PUT",
-        headers: { "content-type": file.type },
-        body: file,
-      });
-      if (!response.ok) throw new Error(`Upload failed (${response.status})`);
-      let preview: { width?: number; height?: number; durationMs?: number } =
-        {};
-      try {
-        preview = await readMediaPreview(file);
-      } catch (error) {
-        if (file.type.startsWith("video/")) {
-          await requestJson(`/admin/media/${created.asset.id}/complete`, {
-            method: "POST",
-            body: "{}",
-          });
-          throw error;
-        }
-      }
-      const completed = await requestJson<{ asset: MediaAsset }>(
-        `/admin/media/${created.asset.id}/complete`,
-        { method: "POST", body: JSON.stringify(preview) },
-      );
-      if (completed.asset.status !== "ready")
-        throw new Error(
-          completed.asset.failureReason ?? "Media could not be processed",
-        );
-      if (file.type.startsWith("video/")) {
-        try {
-          const thumbnail = await captureVideoThumbnail(file);
-          await requestJson(`/admin/media/${created.asset.id}/thumbnail`, {
-            method: "PUT",
-            headers: { "content-type": "image/jpeg" },
-            body: thumbnail,
-          });
-        } catch {
-          // Poster generation is best-effort; the playable video is ready.
-        }
-      }
-    },
-    onSettled: () => {
-      void queryClient.invalidateQueries({ queryKey: ["media"] });
-    },
-  });
+  const { entries, enqueue } = useMediaUploadQueue();
+  const [draggingFiles, setDraggingFiles] = useState(false);
+
+  useEffect(() => {
+    const hasFiles = (event: DragEvent) =>
+      Array.from(event.dataTransfer?.types ?? []).includes("Files");
+    const onDragEnter = (event: DragEvent) => {
+      if (!hasFiles(event)) return;
+      event.preventDefault();
+      setDraggingFiles(true);
+    };
+    const onDragOver = (event: DragEvent) => {
+      if (hasFiles(event)) event.preventDefault();
+    };
+    const onDragLeave = (event: DragEvent) => {
+      if (!event.relatedTarget) setDraggingFiles(false);
+    };
+    const onDrop = (event: DragEvent) => {
+      if (!hasFiles(event)) return;
+      event.preventDefault();
+      setDraggingFiles(false);
+      enqueue(Array.from(event.dataTransfer?.files ?? []));
+    };
+    window.addEventListener("dragenter", onDragEnter);
+    window.addEventListener("dragover", onDragOver);
+    window.addEventListener("dragleave", onDragLeave);
+    window.addEventListener("drop", onDrop);
+    return () => {
+      window.removeEventListener("dragenter", onDragEnter);
+      window.removeEventListener("dragover", onDragOver);
+      window.removeEventListener("dragleave", onDragLeave);
+      window.removeEventListener("drop", onDrop);
+    };
+  }, [enqueue]);
   return (
     <Stack gap="xl">
       <Group justify="space-between" align="end">
@@ -94,27 +67,60 @@ export const MediaPage = () => {
             Library
           </Text>
           <Title>Media library</Title>
-          <Text c="dimmed">Upload the images and videos you want to show.</Text>
+          <Text c="dimmed">
+            Choose several images or videos, or drop them anywhere on this page.
+          </Text>
         </Stack>
         <FileButton
-          onChange={(file) => {
-            if (file) upload.mutate(file);
-          }}
+          multiple
+          onChange={(files) => enqueue(files ?? [])}
           accept="image/jpeg,image/png,image/webp,image/gif,video/mp4,video/webm"
         >
           {(props) => (
-            <Button
-              {...props}
-              leftSection={<LuUpload size={16} />}
-              loading={upload.isPending}
-            >
+            <Button {...props} leftSection={<LuUpload size={16} />}>
               Upload media
             </Button>
           )}
         </FileButton>
       </Group>
-      {upload.error && <Alert color="red">{upload.error.message}</Alert>}
-      {upload.isSuccess && (
+      {entries.length > 0 && (
+        <Paper withBorder p="lg">
+          <Stack gap="sm">
+            <Text fw={600}>Upload queue</Text>
+            {entries.map((entry) => (
+              <Group
+                key={entry.id}
+                data-testid="upload-entry"
+                justify="space-between"
+                align="start"
+                gap="sm"
+              >
+                <Stack gap={0}>
+                  <Text size="sm">{entry.name}</Text>
+                  {entry.error && (
+                    <Text size="xs" c="red">
+                      {entry.error}
+                    </Text>
+                  )}
+                </Stack>
+                <Badge
+                  variant="light"
+                  color={
+                    entry.status === "ready"
+                      ? "signal"
+                      : entry.status === "failed"
+                        ? "red"
+                        : "gray"
+                  }
+                >
+                  {entry.status}
+                </Badge>
+              </Group>
+            ))}
+          </Stack>
+        </Paper>
+      )}
+      {entries.some((entry) => entry.status === "ready") && (
         <Alert color="signal">Media is ready for playlists.</Alert>
       )}
       <Paper withBorder p="lg">
@@ -180,6 +186,15 @@ export const MediaPage = () => {
         )}
         {assets.error && <Alert color="red">{assets.error.message}</Alert>}
       </Paper>
+      {draggingFiles && (
+        <div className={classes.dropOverlay} data-testid="media-drop-overlay">
+          <Paper withBorder shadow="xl" p="xl" ta="center">
+            <LuUpload size={32} aria-hidden="true" />
+            <Title order={3}>Drop files to upload</Title>
+            <Text c="dimmed">Images and videos can be uploaded together.</Text>
+          </Paper>
+        </div>
+      )}
     </Stack>
   );
 };
