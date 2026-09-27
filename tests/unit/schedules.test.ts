@@ -20,7 +20,12 @@ const weekly = (
   timezone,
   startAt: localTimeToInstant(startLocal, timezone),
   endAt: localTimeToInstant(endLocal, timezone),
-  weekInterval,
+  repeatInterval: weekInterval,
+  weekdays: [new Date(`${startLocal}:00Z`).getUTCDay() || 7],
+  monthDay: null,
+  monthOrdinal: null,
+  monthWeekday: null,
+  lastOccurrenceDate: null,
   recurrenceUntil: null,
 });
 

@@ -1,6 +1,7 @@
 import { relations } from "drizzle-orm";
 import {
   boolean,
+  date,
   index,
   integer,
   pgEnum,
@@ -31,7 +32,12 @@ export const assignmentMode = pgEnum("assignment_mode", [
   "scheduled",
   "override",
 ]);
-export const recurrenceKind = pgEnum("recurrence_kind", ["none", "weekly"]);
+export const recurrenceKind = pgEnum("recurrence_kind", [
+  "none",
+  "daily",
+  "weekly",
+  "monthly",
+]);
 
 export const organizations = pgTable("organizations", {
   id: uuid("id").primaryKey().defaultRandom(),
@@ -261,7 +267,12 @@ export const scheduleRules = pgTable(
     startAt: timestamp("start_at", { withTimezone: true }).notNull(),
     endAt: timestamp("end_at", { withTimezone: true }).notNull(),
     timezone: varchar("timezone", { length: 100 }).notNull(),
-    weekInterval: integer("week_interval"),
+    repeatInterval: integer("repeat_interval"),
+    weekdays: integer("weekdays").array(),
+    monthDay: integer("month_day"),
+    monthOrdinal: integer("month_ordinal"),
+    monthWeekday: integer("month_weekday"),
+    lastOccurrenceDate: date("last_occurrence_date", { mode: "string" }),
     recurrenceUntil: timestamp("recurrence_until", { withTimezone: true }),
   },
   (table) => [index("schedule_rules_org_idx").on(table.organizationId)],

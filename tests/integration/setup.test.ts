@@ -8,7 +8,11 @@ import postgres from "postgres";
 import { createApp } from "../../apps/api/src/app";
 import { createLocalAuth } from "../../apps/api/src/auth/localAuth";
 import { createDatabase } from "../../apps/api/src/db/client";
-import { invitations, organizations } from "../../apps/api/src/db/schema";
+import {
+  displays,
+  invitations,
+  organizations,
+} from "../../apps/api/src/db/schema";
 import { createLocalStorage } from "../../apps/api/src/media/localStorage";
 import { testDatabaseAdminUrl } from "../config";
 
@@ -1013,5 +1017,501 @@ describe("first-run organization setup", () => {
       },
     );
     expect(missingExpiry.status).toBe(400);
+  });
+
+  test("Append and Override creation accept general recurrence and reject invalid combinations", async () => {
+    const login = await app.request("/auth/login", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        email: "owner@example.com",
+        password: "super-long-password",
+      }),
+    });
+    const token = ((await login.json()) as { accessToken: string }).accessToken;
+    const headers = {
+      "content-type": "application/json",
+      authorization: `Bearer ${token}`,
+    };
+    const created = await app.request("/admin/displays", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ name: "Recurrence fixture" }),
+    });
+    const displayId = ((await created.json()) as { display: { id: string } })
+      .display.id;
+    const patterns = [
+      { recurrence: "daily", repeatInterval: 2 },
+      {
+        recurrence: "weekly",
+        repeatInterval: 2,
+        weekdays: [1, 4],
+      },
+      { recurrence: "monthly", repeatInterval: 1, monthDay: 31 },
+      {
+        recurrence: "monthly",
+        repeatInterval: 1,
+        monthOrdinal: -1,
+        monthWeekday: 5,
+      },
+    ];
+    for (const path of ["schedules", "overrides"] as const) {
+      for (const pattern of patterns) {
+        const response = await app.request(
+          `/admin/displays/${displayId}/${path}`,
+          {
+            method: "POST",
+            headers,
+            body: JSON.stringify({
+              playlistId: readyPlaylistId,
+              startLocal: "2026-01-31T09:00",
+              endLocal: "2026-01-31T10:00",
+              lastOccurrenceDate: "2026-12-31",
+              ...pattern,
+            }),
+          },
+        );
+        expect(response.status).toBe(201);
+        const saved = (await response.json()) as {
+          assignment: {
+            schedule: { recurrence: string; repeatInterval: number };
+          };
+        };
+        expect(saved.assignment.schedule.recurrence).toBe(pattern.recurrence);
+        expect(saved.assignment.schedule.repeatInterval).toBe(
+          pattern.repeatInterval,
+        );
+      }
+    }
+    for (const invalid of [
+      { recurrence: "weekly", weekdays: [] },
+      { recurrence: "monthly", monthDay: 1, monthOrdinal: -1, monthWeekday: 5 },
+      { recurrence: "daily", repeatInterval: 0 },
+      { recurrence: "daily", lastOccurrenceDate: "2025-01-01" },
+    ]) {
+      const response = await app.request(
+        `/admin/displays/${displayId}/schedules`,
+        {
+          method: "POST",
+          headers,
+          body: JSON.stringify({
+            playlistId: readyPlaylistId,
+            startLocal: "2026-01-31T09:00",
+            endLocal: "2026-01-31T10:00",
+            ...invalid,
+          }),
+        },
+      );
+      expect(response.status).toBe(400);
+    }
+    const invalidNow = await app.request(
+      `/admin/displays/${displayId}/overrides`,
+      {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          playlistId: readyPlaylistId,
+          activateNow: true,
+          endLocal: "2099-01-01T00:00",
+          recurrence: "daily",
+        }),
+      },
+    );
+    expect(invalidNow.status).toBe(400);
+  });
+
+  test("assignment settings edit preserves identity, timezone, and detects stale or foreign edits", async () => {
+    const login = await app.request("/auth/login", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        email: "owner@example.com",
+        password: "super-long-password",
+      }),
+    });
+    const token = ((await login.json()) as { accessToken: string }).accessToken;
+    const headers = {
+      "content-type": "application/json",
+      authorization: `Bearer ${token}`,
+    };
+    const created = await app.request("/admin/displays", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ name: "Edit recurrence fixture" }),
+    });
+    const displayId = ((await created.json()) as { display: { id: string } })
+      .display.id;
+    const create = async (path: "schedules" | "overrides") => {
+      const response = await app.request(
+        `/admin/displays/${displayId}/${path}`,
+        {
+          method: "POST",
+          headers,
+          body: JSON.stringify({
+            playlistId: readyPlaylistId,
+            startLocal: "2026-02-01T09:00",
+            endLocal: "2026-02-01T10:00",
+            recurrence: "daily",
+          }),
+        },
+      );
+      expect(response.status).toBe(201);
+      return (await response.json()) as {
+        assignment: {
+          id: string;
+          mode: string;
+          playlistId: string;
+          version?: string;
+          schedule: { timezone: string };
+        };
+      };
+    };
+    const append = (await create("schedules")).assignment;
+    const override = (await create("overrides")).assignment;
+    const list = await app.request(`/admin/displays/${displayId}/assignments`, {
+      headers,
+    });
+    const listed = (await list.json()) as {
+      assignments: { id: string; version: string }[];
+    };
+    const version = (id: string) =>
+      listed.assignments.find((item) => item.id === id)?.version ?? "";
+    const edit = (
+      id: string,
+      body: Record<string, unknown>,
+      targetDisplay = displayId,
+    ) =>
+      app.request(`/admin/displays/${targetDisplay}/assignments/${id}`, {
+        method: "PATCH",
+        headers,
+        body: JSON.stringify(body),
+      });
+    const noop = await edit(append.id, { expectedVersion: version(append.id) });
+    expect(noop.status).toBe(200);
+    const unchanged = (await noop.json()) as {
+      assignment: typeof append & { version: string };
+    };
+    expect(unchanged.assignment.version).toBe(version(append.id));
+    expect(unchanged.assignment.schedule.timezone).toBe(
+      append.schedule.timezone,
+    );
+    const changed = await edit(append.id, {
+      expectedVersion: unchanged.assignment.version,
+      recurrence: "monthly",
+      monthDay: 31,
+      startLocal: "2026-02-02T09:00",
+      endLocal: "2026-02-02T10:00",
+    });
+    expect(changed.status).toBe(200);
+    const saved = (await changed.json()) as {
+      assignment: typeof append & {
+        version: string;
+        schedule: { timezone: string; recurrence: string; monthDay: number };
+      };
+    };
+    expect(saved.assignment.playlistId).toBe(append.playlistId);
+    expect(saved.assignment.mode).toBe("scheduled");
+    expect(saved.assignment.schedule).toMatchObject({
+      timezone: append.schedule.timezone,
+      recurrence: "monthly",
+      monthDay: 31,
+    });
+    expect(
+      (
+        await edit(append.id, {
+          expectedVersion: version(append.id),
+          endLocal: "2026-02-02T11:00",
+        })
+      ).status,
+    ).toBe(409);
+    expect(
+      (
+        await edit(append.id, {
+          expectedVersion: saved.assignment.version,
+          priority: 9,
+        })
+      ).status,
+    ).toBe(400);
+    expect(
+      (
+        await edit(append.id, {
+          expectedVersion: saved.assignment.version,
+          recurrence: "weekly",
+          weekdays: [],
+        })
+      ).status,
+    ).toBe(400);
+    const changedOverride = await edit(override.id, {
+      expectedVersion: version(override.id),
+      priority: 7,
+      recurrence: "weekly",
+      repeatInterval: 2,
+      weekdays: [1, 5],
+    });
+    expect(changedOverride.status).toBe(200);
+    const savedOverride = (await changedOverride.json()) as {
+      assignment: {
+        mode: string;
+        playlistId: string;
+        priority: number;
+        schedule: { recurrence: string; weekdays: number[] };
+      };
+    };
+    expect(savedOverride.assignment).toMatchObject({
+      mode: "override",
+      playlistId: readyPlaylistId,
+      priority: 7,
+    });
+    expect(savedOverride.assignment.schedule).toMatchObject({
+      recurrence: "weekly",
+      weekdays: [1, 5],
+    });
+    const [otherOrganization] = await connection.db
+      .insert(organizations)
+      .values({ name: "Other organization", timezone: "America/New_York" })
+      .returning();
+    if (!otherOrganization)
+      throw new Error("Other organization was not created");
+    const [otherDisplay] = await connection.db
+      .insert(displays)
+      .values({
+        organizationId: otherOrganization.id,
+        name: "Foreign display",
+        playerToken: crypto.randomUUID(),
+        playerTokenHash: crypto.randomUUID(),
+      })
+      .returning();
+    if (!otherDisplay) throw new Error("Foreign display was not created");
+    expect(
+      (
+        await edit(
+          append.id,
+          { expectedVersion: saved.assignment.version },
+          otherDisplay.id,
+        )
+      ).status,
+    ).toBe(404);
+    expect(
+      (
+        await edit(
+          override.id,
+          { expectedVersion: version(override.id) },
+          otherDisplay.id,
+        )
+      ).status,
+    ).toBe(404);
+  });
+
+  test("recurring Overrides publish absolute lookahead windows with priority handoff", async () => {
+    const login = await app.request("/auth/login", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        email: "owner@example.com",
+        password: "super-long-password",
+      }),
+    });
+    const token = ((await login.json()) as { accessToken: string }).accessToken;
+    const headers = {
+      "content-type": "application/json",
+      authorization: `Bearer ${token}`,
+    };
+    const created = await app.request("/admin/displays", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ name: "Override windows fixture" }),
+    });
+    const displayId = ((await created.json()) as { display: { id: string } })
+      .display.id;
+    const add = async (
+      priority: number,
+      recurrence: Record<string, unknown>,
+    ) => {
+      const response = await app.request(
+        `/admin/displays/${displayId}/overrides`,
+        {
+          method: "POST",
+          headers,
+          body: JSON.stringify({
+            playlistId: readyPlaylistId,
+            priority,
+            startLocal: "2026-10-01T12:00",
+            endLocal: "2026-10-01T12:05",
+            ...recurrence,
+          }),
+        },
+      );
+      expect(response.status).toBe(201);
+      return ((await response.json()) as { assignment: { id: string } })
+        .assignment.id;
+    };
+    const dailyId = await add(1, {
+      recurrence: "daily",
+      lastOccurrenceDate: "2026-10-03",
+    });
+    const highId = await add(9, {
+      recurrence: "daily",
+      startLocal: "2026-10-02T12:01",
+      endLocal: "2026-10-02T12:03",
+      lastOccurrenceDate: "2026-10-03",
+    });
+    const preview = async (atLocal: string) => {
+      const response = await app.request(
+        `/admin/displays/${displayId}/preview?atLocal=${atLocal}`,
+        { headers },
+      );
+      expect(response.status).toBe(200);
+      return (await response.json()) as {
+        version: string;
+        override: { assignmentId: string } | null;
+        overrideWindows: {
+          assignmentId: string;
+          startAt: string;
+          endAt: string;
+        }[];
+        transitions: { overrideId: string | null }[];
+      };
+    };
+    const before = await preview("2026-10-02T11:59");
+    expect(before.override).toBeNull();
+    expect(
+      before.overrideWindows.filter(
+        (window) => window.assignmentId === dailyId,
+      ),
+    ).toHaveLength(2);
+    expect(
+      before.transitions.map((transition) => transition.overrideId),
+    ).toEqual([dailyId, highId, dailyId, null, dailyId, highId, dailyId, null]);
+    expect((await preview("2026-10-02T12:00")).override?.assignmentId).toBe(
+      dailyId,
+    );
+    expect((await preview("2026-10-02T12:01")).override?.assignmentId).toBe(
+      highId,
+    );
+    expect((await preview("2026-10-02T12:03")).override?.assignmentId).toBe(
+      dailyId,
+    );
+    expect((await preview("2026-10-02T12:05")).override).toBeNull();
+    expect((await preview("2026-10-04T12:00")).override).toBeNull();
+    const same = await preview("2026-10-02T11:59");
+    expect(same.version).toBe(before.version);
+    const long = await app.request(`/admin/displays/${displayId}/overrides`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        playlistId: readyPlaylistId,
+        priority: 2,
+        startLocal: "2026-10-10T12:00",
+        endLocal: "2026-11-30T12:00",
+      }),
+    });
+    expect(long.status).toBe(201);
+    const withLong = await preview("2026-10-02T11:59");
+    expect(
+      withLong.overrideWindows.some((window) =>
+        window.endAt.startsWith("2026-11-30"),
+      ),
+    ).toBeTrue();
+  });
+
+  test("Append preview shares daily, weekday, monthly, end-date, and DST resolution", async () => {
+    const login = await app.request("/auth/login", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        email: "owner@example.com",
+        password: "super-long-password",
+      }),
+    });
+    const token = ((await login.json()) as { accessToken: string }).accessToken;
+    const headers = {
+      "content-type": "application/json",
+      authorization: `Bearer ${token}`,
+    };
+    const cases = [
+      {
+        rule: {
+          recurrence: "daily",
+          startLocal: "2026-01-01T09:00",
+          endLocal: "2026-01-01T10:00",
+          lastOccurrenceDate: "2026-01-03",
+        },
+        yes: "2026-01-03T09:30",
+        no: "2026-01-04T09:30",
+      },
+      {
+        rule: {
+          recurrence: "weekly",
+          startLocal: "2026-01-05T09:00",
+          endLocal: "2026-01-05T10:00",
+          weekdays: [1, 4],
+        },
+        yes: "2026-01-08T09:30",
+        no: "2026-01-09T09:30",
+      },
+      {
+        rule: {
+          recurrence: "monthly",
+          startLocal: "2026-01-31T09:00",
+          endLocal: "2026-01-31T10:00",
+          monthDay: 31,
+        },
+        yes: "2026-03-31T09:30",
+        no: "2026-02-28T09:30",
+      },
+      {
+        rule: {
+          recurrence: "monthly",
+          startLocal: "2026-01-30T09:00",
+          endLocal: "2026-01-30T10:00",
+          monthOrdinal: -1,
+          monthWeekday: 5,
+        },
+        yes: "2026-02-27T09:30",
+        no: "2026-02-20T09:30",
+      },
+      {
+        rule: {
+          recurrence: "daily",
+          startLocal: "2026-03-07T02:30",
+          endLocal: "2026-03-07T03:00",
+        },
+        yes: "2026-03-08T03:45",
+        no: "2026-03-08T04:00",
+      },
+    ];
+    for (const { rule, yes, no } of cases) {
+      const created = await app.request("/admin/displays", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ name: `Append ${rule.recurrence} ${yes}` }),
+      });
+      const displayId = ((await created.json()) as { display: { id: string } })
+        .display.id;
+      const assigned = await app.request(
+        `/admin/displays/${displayId}/schedules`,
+        {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ playlistId: readyPlaylistId, ...rule }),
+        },
+      );
+      expect(assigned.status).toBe(201);
+      for (const [at, expected] of [
+        [yes, true],
+        [no, false],
+      ] as const) {
+        const preview = await app.request(
+          `/admin/displays/${displayId}/preview?atLocal=${at}`,
+          { headers },
+        );
+        expect(preview.status).toBe(200);
+        const manifest = (await preview.json()) as { normalQueue: unknown[] };
+        expect(
+          manifest.normalQueue.length > 0,
+          `${rule.recurrence} ${yes} at ${at}`,
+        ).toBe(expected);
+      }
+    }
   });
 });

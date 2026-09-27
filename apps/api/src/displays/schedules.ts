@@ -4,6 +4,7 @@ import type {
   OverrideWindow,
 } from "@pixelpushr/contracts/manifest";
 import type { scheduleRules } from "../db/schema";
+import { occurrenceWindows } from "./recurrence";
 
 export type ScheduleRule = typeof scheduleRules.$inferSelect;
 
@@ -18,56 +19,20 @@ export const localTimeToInstant = (
   return new Date(instant.epochMilliseconds);
 };
 
-const occurrence = (
-  rule: ScheduleRule,
-  organizationTimezone: string,
-  week: number,
-) => {
-  // The original timezone preserves the administrator-entered wall clock if the
-  // organization changes timezone later. The new zone then owns future repeats.
-  const startLocal = Temporal.Instant.from(rule.startAt.toISOString())
-    .toZonedDateTimeISO(rule.timezone)
-    .toPlainDateTime();
-  const endLocal = Temporal.Instant.from(rule.endAt.toISOString())
-    .toZonedDateTimeISO(rule.timezone)
-    .toPlainDateTime();
-  const weeks = week * (rule.weekInterval ?? 1);
-  return {
-    start: startLocal.add({ weeks }).toZonedDateTime(organizationTimezone)
-      .epochMilliseconds,
-    end: endLocal.add({ weeks }).toZonedDateTime(organizationTimezone)
-      .epochMilliseconds,
-  };
-};
-
-/** Half-open [start, end) schedule window, with calendar-week recurrence. */
+/** Half-open [start, end) activity check shared by all recurrence kinds. */
 export const isScheduleActive = (
   rule: ScheduleRule,
   organizationTimezone: string,
   at: Date,
 ): boolean => {
-  const now = at.getTime();
-  if (rule.recurrence === "none")
-    return now >= rule.startAt.getTime() && now < rule.endAt.getTime();
-  const startDate = Temporal.Instant.from(rule.startAt.toISOString())
-    .toZonedDateTimeISO(rule.timezone)
-    .toPlainDate();
-  const currentDate = Temporal.Instant.from(at.toISOString())
-    .toZonedDateTimeISO(organizationTimezone)
-    .toPlainDate();
-  const days = currentDate.since(startDate, { largestUnit: "days" }).days;
-  const approximateWeek = Math.floor(days / (7 * (rule.weekInterval ?? 1)));
-  for (
-    let week = Math.max(0, approximateWeek - 1);
-    week <= Math.max(0, approximateWeek + 1);
-    week += 1
-  ) {
-    const window = occurrence(rule, organizationTimezone, week);
-    if (rule.recurrenceUntil && window.start >= rule.recurrenceUntil.getTime())
-      continue;
-    if (now >= window.start && now < window.end) return true;
-  }
-  return false;
+  return (
+    occurrenceWindows(
+      rule,
+      organizationTimezone,
+      at,
+      new Date(at.getTime() + 1),
+    ).length > 0
+  );
 };
 
 /** Highest priority wins; assignment ID breaks ties consistently across requests. */

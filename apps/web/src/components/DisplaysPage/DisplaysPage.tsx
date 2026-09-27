@@ -18,6 +18,7 @@ import {
   LuArrowDown,
   LuArrowUp,
   LuExternalLink,
+  LuPencil,
   LuPlus,
   LuTrash2,
 } from "react-icons/lu";
@@ -25,7 +26,12 @@ import { Link, useParams } from "wouter";
 import { requestJson } from "../../helpers/api";
 import type { Playlist } from "../../models/media.models";
 import { AddPlaylistDrawer } from "./AddPlaylistDrawer";
-import type { Assignment, Display } from "./assignment.models";
+import {
+  type Assignment,
+  type Display,
+  recurrenceSummary,
+} from "./assignment.models";
+import { EditAssignmentDrawer } from "./EditAssignmentDrawer";
 import { ScheduleTimePreview } from "./ScheduleTimePreview";
 
 /** Registers displays and exposes each public browser player URL. */
@@ -198,6 +204,7 @@ export const DisplayEditorPage = () => {
       requestJson<{ organization: { timezone: string } }>("/admin/me"),
   });
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
   const [always, setAlways] = useState<string[]>([]);
   useEffect(() => {
     if (assignments.data)
@@ -348,11 +355,21 @@ export const DisplayEditorPage = () => {
                     </Group>
                     <Text size="xs" c="dimmed">
                       {schedule
-                        ? `${new Date(schedule.startAt).toLocaleString("en-US", { timeZone: schedule.timezone })} → ${new Date(schedule.endAt).toLocaleString("en-US", { timeZone: schedule.timezone })} · ${schedule.timezone}${schedule.recurrence === "weekly" ? ` · Every ${schedule.weekInterval ?? 1} week(s)` : ""}`
+                        ? `${new Date(schedule.startAt).toLocaleString("en-US", { timeZone: schedule.timezone })} → ${new Date(schedule.endAt).toLocaleString("en-US", { timeZone: schedule.timezone })} · ${schedule.timezone} · ${recurrenceSummary(schedule)}`
                         : `Always active · Position ${position + 1}`}
                     </Text>
                   </Stack>
                   <Group gap="xs">
+                    {schedule && (
+                      <ActionIcon
+                        variant="subtle"
+                        color="gray"
+                        aria-label={`Edit ${item.playlistName} ${item.mode} settings`}
+                        onClick={() => setEditingId(item.id)}
+                      >
+                        <LuPencil size={16} />
+                      </ActionIcon>
+                    )}
                     {position >= 0 && (
                       <>
                         <ActionIcon
@@ -436,6 +453,21 @@ export const DisplayEditorPage = () => {
           playlists={playlists.data?.playlists ?? []}
           timezone={me.data?.organization.timezone ?? "organization timezone"}
           assignments={items}
+        />
+      )}
+      {id && (
+        <EditAssignmentDrawer
+          assignment={items.find((item) => item.id === editingId) ?? null}
+          displayId={id}
+          onClose={() => setEditingId(null)}
+          onSaved={() => {
+            void queryClient.invalidateQueries({
+              queryKey: ["assignments", id],
+            });
+            void queryClient.invalidateQueries({
+              queryKey: ["schedule-preview", id],
+            });
+          }}
         />
       )}
     </Stack>

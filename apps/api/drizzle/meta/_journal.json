@@ -29,6 +29,20 @@
       "when": 1790513095627,
       "tag": "0003_wandering_marauders",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1790538333487,
+      "tag": "0004_grey_ares",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1790538890978,
+      "tag": "0005_exotic_maelstrom",
+      "breakpoints": true
     }
   ]
 }

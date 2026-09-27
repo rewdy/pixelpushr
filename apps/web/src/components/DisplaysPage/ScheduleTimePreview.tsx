@@ -1,22 +1,18 @@
-import {
-  Alert,
-  Button,
-  Group,
-  Paper,
-  Stack,
-  Text,
-  TextInput,
-  Title,
-} from "@mantine/core";
+import { Alert, Button, Group, Paper, Stack, Text, Title } from "@mantine/core";
 import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { requestJson } from "../../helpers/api";
 import type { Playlist } from "../../models/media.models";
+import { LocalDateTimePicker } from "./LocalDateTimePicker";
 
 type Props = { displayId: string; timezone: string; playlists: Playlist[] };
-type ManifestPreview = { normalQueue: { playlistId: string }[] };
+type ManifestPreview = {
+  normalQueue: { playlistId: string }[];
+  activeQueue: { playlistId: string }[];
+  override: { assignmentId: string } | null;
+};
 
-/** Shows the server-resolved normal queue at a chosen local time. */
+/** Shows the server-resolved effective queue, including a winning Override. */
 export const ScheduleTimePreview = ({
   displayId,
   timezone,
@@ -40,14 +36,14 @@ export const ScheduleTimePreview = ({
       <Stack gap="sm">
         <Title order={3}>Preview effective queue</Title>
         <Text size="sm" c="dimmed">
-          Choose a time in {timezone} to see which playlists will cycle.
+          Choose a time in {timezone} to see the normal queue or winning
+          Override.
         </Text>
         <Group align="end">
-          <TextInput
+          <LocalDateTimePicker
             label="Preview at"
-            type="datetime-local"
             value={local}
-            onChange={(event) => setLocal(event.currentTarget.value)}
+            onChange={setLocal}
           />
           <Button
             variant="light"
@@ -60,10 +56,11 @@ export const ScheduleTimePreview = ({
         {preview.error && <Alert color="red">{preview.error.message}</Alert>}
         {preview.data && (
           <Text size="sm">
-            {preview.data.normalQueue.length
+            {preview.data.override ? "Winning override: " : ""}
+            {preview.data.activeQueue.length
               ? [
                   ...new Set(
-                    preview.data.normalQueue.map((item) => item.playlistId),
+                    preview.data.activeQueue.map((item) => item.playlistId),
                   ),
                 ]
                   .map((id) => names.get(id) ?? "Unknown playlist")

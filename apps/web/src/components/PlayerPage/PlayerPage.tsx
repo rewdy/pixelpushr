@@ -18,6 +18,7 @@ import {
   type QueueState,
   receiveManifest,
 } from "../../helpers/playerQueue";
+import { transitionDelayMs } from "../../helpers/transitionTimer";
 import { PlayerMediaLayer } from "./PlayerMediaLayer";
 import classes from "./PlayerPage.module.css";
 
@@ -232,19 +233,29 @@ export const PlayerPage = () => {
         Date.parse(transition.at) > Date.now() + clockOffsetMs.current,
     );
     if (!next) return;
-    const delay = Math.max(
-      0,
-      Date.parse(next.at) - (Date.now() + clockOffsetMs.current) + 10,
-    );
-    const timer = window.setTimeout(
-      () =>
-        updateState((current) =>
-          current
-            ? applyTimedOverride(current, Date.now() + clockOffsetMs.current)
-            : current,
+    const boundaryAt = Date.parse(next.at);
+    let timer: number;
+    const arm = () => {
+      const remaining = boundaryAt - (Date.now() + clockOffsetMs.current);
+      timer = window.setTimeout(
+        () => {
+          if (boundaryAt > Date.now() + clockOffsetMs.current) {
+            arm();
+            return;
+          }
+          updateState((current) =>
+            current
+              ? applyTimedOverride(current, Date.now() + clockOffsetMs.current)
+              : current,
+          );
+        },
+        transitionDelayMs(
+          boundaryAt + (remaining <= 0 ? 0 : 10),
+          Date.now() + clockOffsetMs.current,
         ),
-      delay,
-    );
+      );
+    };
+    arm();
     return () => window.clearTimeout(timer);
   }, [state, updateState]);
 

@@ -9,13 +9,18 @@ import {
   Select,
   Stack,
   Text,
-  TextInput,
 } from "@mantine/core";
 import { useMutation } from "@tanstack/react-query";
 import { useState } from "react";
 import { requestJson } from "../../helpers/api";
 import type { Playlist } from "../../models/media.models";
 import type { Assignment } from "./assignment.models";
+import { LocalDateTimePicker } from "./LocalDateTimePicker";
+import {
+  emptyRecurrence,
+  RecurrenceFields,
+  recurrencePayload,
+} from "./RecurrenceFields";
 
 type Props = {
   opened: boolean;
@@ -42,8 +47,7 @@ export const AddPlaylistDrawer = ({
   const [behavior, setBehavior] = useState("append");
   const [startLocal, setStartLocal] = useState("");
   const [endLocal, setEndLocal] = useState("");
-  const [recurrence, setRecurrence] = useState("none");
-  const [weekInterval, setWeekInterval] = useState<number | string>(1);
+  const [recurrence, setRecurrence] = useState(emptyRecurrence);
   const [activateNow, setActivateNow] = useState(false);
   const [priority, setPriority] = useState<number | string>(0);
   const [validationError, setValidationError] = useState<string | null>(null);
@@ -75,22 +79,13 @@ export const AddPlaylistDrawer = ({
         if (!startLocal) throw new Error("Enter a start time.");
         if (endLocal <= startLocal)
           throw new Error("Schedule end must be after start.");
-        if (
-          recurrence === "weekly" &&
-          (!Number.isInteger(Number(weekInterval)) ||
-            Number(weekInterval) < 1 ||
-            Number(weekInterval) > 52)
-        )
-          throw new Error("Repeat every must be between 1 and 52 weeks.");
         return requestJson(`/admin/displays/${displayId}/schedules`, {
           method: "POST",
           body: JSON.stringify({
             playlistId,
             startLocal,
             endLocal,
-            recurrence,
-            weekInterval:
-              recurrence === "weekly" ? Number(weekInterval) : undefined,
+            ...recurrencePayload(recurrence, startLocal),
             position: assignments.filter((item) => item.mode === "scheduled")
               .length,
           }),
@@ -113,12 +108,20 @@ export const AddPlaylistDrawer = ({
           startLocal: activateNow ? undefined : startLocal,
           endLocal,
           priority: Number(priority),
+          ...recurrencePayload(recurrence, startLocal),
         }),
       });
     },
     onSuccess: () => {
       setValidationError(null);
       setPlaylistId(null);
+      setTiming("always");
+      setBehavior("append");
+      setStartLocal("");
+      setEndLocal("");
+      setRecurrence(emptyRecurrence());
+      setActivateNow(false);
+      setPriority(0);
       onSaved();
       onClose();
     },
@@ -181,28 +184,27 @@ export const AddPlaylistDrawer = ({
               <Checkbox
                 label="Activate now"
                 checked={activateNow}
+                disabled={recurrence.recurrence !== "none"}
                 onChange={(event) =>
                   setActivateNow(event.currentTarget.checked)
                 }
               />
             )}
             {(!override || !activateNow) && (
-              <TextInput
+              <LocalDateTimePicker
                 label="Start"
-                type="datetime-local"
                 value={startLocal}
-                onChange={(event) => setStartLocal(event.currentTarget.value)}
+                onChange={setStartLocal}
                 required
               />
             )}
-            <TextInput
+            <LocalDateTimePicker
               label={override ? "Expiration" : "End"}
-              type="datetime-local"
               value={endLocal}
-              onChange={(event) => setEndLocal(event.currentTarget.value)}
+              onChange={setEndLocal}
               required
             />
-            {override ? (
+            {override && (
               <NumberInput
                 label="Priority"
                 description="Larger numbers supersede smaller ones."
@@ -210,29 +212,17 @@ export const AddPlaylistDrawer = ({
                 max={1000}
                 value={priority}
                 onChange={setPriority}
+                w={136}
               />
-            ) : (
-              <>
-                <Select
-                  label="Repeat"
-                  data={[
-                    { value: "none", label: "One-time window" },
-                    { value: "weekly", label: "Every N weeks" },
-                  ]}
-                  value={recurrence}
-                  onChange={(value) => setRecurrence(value ?? "none")}
-                />
-                {recurrence === "weekly" && (
-                  <NumberInput
-                    label="Repeat every (weeks)"
-                    min={1}
-                    max={52}
-                    value={weekInterval}
-                    onChange={setWeekInterval}
-                  />
-                )}
-              </>
             )}
+            <RecurrenceFields
+              value={recurrence}
+              firstDate={startLocal}
+              onChange={(value) => {
+                setRecurrence(value);
+                if (value.recurrence !== "none") setActivateNow(false);
+              }}
+            />
           </>
         )}
         {validationError && <Alert color="red">{validationError}</Alert>}

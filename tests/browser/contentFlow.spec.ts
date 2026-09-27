@@ -1,5 +1,5 @@
 import { type ChildProcess, spawn } from "node:child_process";
-import { expect, test } from "@playwright/test";
+import { expect, type Locator, type Page, test } from "@playwright/test";
 import { migrate } from "drizzle-orm/postgres-js/migrator";
 import postgres from "postgres";
 import { createDatabase } from "../../apps/api/src/db/client";
@@ -27,6 +27,74 @@ let admin: ReturnType<typeof postgres>;
 let connection: ReturnType<typeof createDatabase>;
 let api: ChildProcess;
 let token: string;
+
+const chooseCalendarDate = async (
+  page: Page,
+  control: Locator,
+  date: string,
+) => {
+  await control.click();
+  const dropdownId = await control.getAttribute("aria-controls");
+  if (!dropdownId) throw new Error("Date control has no popup reference");
+  const dropdown = page.locator(`[data-dates-dropdown][id="${dropdownId}"]`);
+  const [year, month, day] = date.split("-").map(Number);
+  if (!year || !month || !day)
+    throw new Error(`Invalid calendar date: ${date}`);
+  const monthLevel = dropdown.locator("[data-month-level]");
+  for (let attempt = 0; attempt < 24; attempt++) {
+    const shown = await monthLevel
+      .locator('[class*="calendarHeaderLevel"]')
+      .textContent();
+    const current = new Date(`${shown} 1`);
+    const delta =
+      year * 12 + month - (current.getFullYear() * 12 + current.getMonth() + 1);
+    if (delta === 0) break;
+    await monthLevel
+      .locator(`button[data-direction="${delta > 0 ? "next" : "previous"}"]`)
+      .click();
+    if (attempt === 23) throw new Error(`Calendar could not reach ${date}`);
+  }
+  const longMonth = new Intl.DateTimeFormat("en-US", {
+    month: "long",
+    timeZone: "UTC",
+  }).format(new Date(Date.UTC(year, month - 1, 1)));
+  const dayName = `${day} ${longMonth} ${year}`;
+  const dayControl = dropdown.getByRole("button", {
+    name: dayName,
+    exact: true,
+  });
+  await dayControl.focus();
+  await dayControl.press("Enter");
+  return dropdown;
+};
+
+const chooseDateTime = async (
+  page: Page,
+  scope: Locator,
+  label: string,
+  local: string,
+) => {
+  const [date, time] = local.split("T");
+  if (!date || !time) throw new Error(`Invalid local datetime: ${local}`);
+  const dropdown = await chooseCalendarDate(
+    page,
+    scope.getByRole("button", { name: label, exact: true }),
+    date,
+  );
+  const [hours, minutes] = time.split(":").map(Number);
+  if (hours === undefined || minutes === undefined)
+    throw new Error(`Invalid time: ${time}`);
+  await dropdown
+    .getByRole("spinbutton", { name: "Hours" })
+    .fill(String(hours % 12 || 12));
+  await dropdown
+    .getByRole("spinbutton", { name: "Minutes" })
+    .fill(String(minutes));
+  await dropdown
+    .getByRole("textbox", { name: "AM/PM" })
+    .press(hours < 12 ? "a" : "p");
+  await dropdown.locator('button[class*="submitButton"]').click();
+};
 
 test.beforeAll(async () => {
   admin = postgres(adminUrl, { max: 1 });
@@ -363,7 +431,7 @@ test("upload media and publish an ordered playlist through the real API", async 
   await page.getByRole("button", { name: "Add playlist" }).click();
   const drawer = page.getByRole("dialog", { name: "Add playlist" });
   await expect(drawer.getByRole("radio", { name: "Always-on" })).toBeChecked();
-  await expect(drawer.getByRole("textbox", { name: "Start" })).toHaveCount(0);
+  await expect(drawer.getByRole("button", { name: "Start" })).toHaveCount(0);
   await drawer.getByRole("textbox", { name: "Playlist" }).click();
   await page.getByRole("option", { name: "Brand loop" }).click();
   await drawer.getByRole("button", { name: "Add playlist" }).click();
@@ -405,32 +473,31 @@ test("upload media and publish an ordered playlist through the real API", async 
   ).toHaveCount(0);
   await scheduledDrawer.getByRole("textbox", { name: "Playlist" }).click();
   await page.getByRole("option", { name: "Weekly campaign" }).click();
-  await scheduledDrawer
-    .getByRole("textbox", { name: "Start", exact: true })
-    .fill("2026-09-07T00:00");
-  await scheduledDrawer
-    .getByRole("textbox", { name: "End", exact: true })
-    .fill("2026-09-06T00:00");
+  await chooseDateTime(page, scheduledDrawer, "Start", "2026-09-07T00:00");
+  await chooseDateTime(page, scheduledDrawer, "End", "2026-09-06T00:00");
   await scheduledDrawer.getByRole("button", { name: "Add playlist" }).click();
   await expect(
     scheduledDrawer.getByText("Schedule end must be after start."),
   ).toBeVisible();
-  await scheduledDrawer
-    .getByRole("textbox", { name: "End", exact: true })
-    .fill("2026-09-14T00:00");
+  await chooseDateTime(page, scheduledDrawer, "End", "2026-09-14T00:00");
   await scheduledDrawer
     .getByRole("textbox", { name: "Repeat", exact: true })
     .click();
-  await page.getByRole("option", { name: "Every N weeks" }).click();
+  await page.getByRole("option", { name: "Weekly" }).click();
   await scheduledDrawer
     .getByRole("textbox", { name: "Repeat every (weeks)" })
     .fill("3");
+  await scheduledDrawer.locator(".mantine-MultiSelect-input").click();
+  await page.getByRole("option", { name: "Monday" }).click();
   await scheduledDrawer.getByRole("button", { name: "Add playlist" }).click();
   await expect(scheduledDrawer).toBeHidden();
   await expect(page.getByText("Append", { exact: true })).toBeVisible();
-  await page
-    .getByRole("textbox", { name: "Preview at" })
-    .fill("2026-09-08T12:00");
+  await chooseDateTime(
+    page,
+    page.locator("body"),
+    "Preview at",
+    "2026-09-08T12:00",
+  );
   await page.getByRole("button", { name: "Preview", exact: true }).click();
   await expect(page.getByText("Brand loop → Weekly campaign")).toBeVisible();
   await page.getByRole("button", { name: "Add playlist" }).click();
@@ -438,17 +505,15 @@ test("upload media and publish an ordered playlist through the real API", async 
   await overrideDrawer.getByRole("radio", { name: "Scheduled" }).check();
   await overrideDrawer.getByRole("radio", { name: "Override" }).check();
   await expect(
-    overrideDrawer.getByRole("textbox", { name: "Repeat" }),
-  ).toHaveCount(0);
+    overrideDrawer.getByRole("textbox", { name: "Repeat", exact: true }),
+  ).toBeVisible();
   await overrideDrawer.getByRole("textbox", { name: "Playlist" }).click();
   await page.getByRole("option", { name: "Weekly campaign" }).click();
   await overrideDrawer.getByRole("checkbox", { name: "Activate now" }).check();
   await expect(
-    overrideDrawer.getByRole("textbox", { name: "Start" }),
+    overrideDrawer.getByRole("button", { name: "Start" }),
   ).toHaveCount(0);
-  await overrideDrawer
-    .getByRole("textbox", { name: "Expiration" })
-    .fill("2099-01-01T00:00");
+  await chooseDateTime(page, overrideDrawer, "Expiration", "2027-01-01T00:00");
   await overrideDrawer.getByRole("button", { name: "Add playlist" }).click();
   await expect(page.getByText("Override", { exact: true })).toBeVisible();
   await expect(
@@ -481,6 +546,162 @@ test("upload media and publish an ordered playlist through the real API", async 
   await expect(
     page.getByText("No playlists assigned. Add one to start playback."),
   ).toBeVisible();
+});
+
+test("recurring Override creation and settings edits use the shared schedule controls", async ({
+  page,
+}) => {
+  await page.addInitScript(
+    (accessToken) =>
+      sessionStorage.setItem("pixelpushr-admin-session", accessToken),
+    token,
+  );
+  await page.goto("/displays");
+  await page.getByRole("link", { name: "Assign playlists" }).click();
+  await page.getByRole("button", { name: "Add playlist" }).click();
+  const drawer = page.getByRole("dialog", { name: "Add playlist" });
+  await drawer.getByRole("radio", { name: "Scheduled" }).check();
+  await drawer.getByRole("radio", { name: "Override" }).check();
+  await drawer.getByRole("textbox", { name: "Playlist" }).click();
+  await page.getByRole("option", { name: "Weekly campaign" }).click();
+  await chooseDateTime(page, drawer, "Start", "2026-01-31T09:00");
+  await chooseDateTime(page, drawer, "Expiration", "2026-01-31T10:00");
+  await drawer.getByRole("textbox", { name: "Repeat", exact: true }).click();
+  await page.getByRole("option", { name: "Monthly" }).click();
+  const repeatBox = await drawer
+    .getByRole("textbox", { name: "Repeat", exact: true })
+    .boundingBox();
+  const intervalBox = await drawer
+    .getByRole("textbox", { name: "Repeat every (months)" })
+    .boundingBox();
+  const priorityBox = await drawer
+    .getByRole("textbox", { name: "Priority" })
+    .boundingBox();
+  const drawerBox = await drawer.boundingBox();
+  if (!repeatBox || !intervalBox || !priorityBox || !drawerBox)
+    throw new Error("Schedule layout controls were not rendered");
+  expect(Math.abs(repeatBox.y - intervalBox.y)).toBeLessThan(8);
+  expect(priorityBox.width).toBeLessThan(drawerBox.width / 2);
+  await expect(
+    drawer.getByRole("checkbox", { name: "Activate now" }),
+  ).toBeDisabled();
+  await drawer.getByRole("textbox", { name: "Day of month" }).fill("31");
+  await drawer
+    .getByRole("checkbox", { name: "Set last occurrence date" })
+    .check();
+  await chooseCalendarDate(
+    page,
+    drawer.getByRole("button", { name: "Last occurrence date" }),
+    "2026-12-31",
+  );
+  await drawer.getByRole("button", { name: "Add playlist" }).click();
+  await expect(drawer).toBeHidden();
+  await expect(
+    page.getByText(
+      /Every month on day 31 \(missing dates skipped\).*Last start 2026-12-31/,
+    ),
+  ).toBeVisible();
+  await chooseDateTime(
+    page,
+    page.locator("body"),
+    "Preview at",
+    "2026-02-28T09:30",
+  );
+  await page.getByRole("button", { name: "Preview", exact: true }).click();
+  await expect(page.getByText("No content at this time")).toBeVisible();
+  await chooseDateTime(
+    page,
+    page.locator("body"),
+    "Preview at",
+    "2026-03-31T09:30",
+  );
+  await page.getByRole("button", { name: "Preview", exact: true }).click();
+  await expect(
+    page.getByText(/Winning override: Weekly campaign/),
+  ).toBeVisible();
+  await page
+    .getByRole("button", { name: "Edit Weekly campaign override settings" })
+    .click();
+  const edit = page.getByRole("dialog", {
+    name: "Edit Weekly campaign settings",
+  });
+  await expect(edit.getByRole("button", { name: /Start/ })).toContainText(
+    "Jan 31, 2026 9:00 AM",
+  );
+  await expect(
+    edit.getByRole("button", { name: "Save settings" }),
+  ).toBeDisabled();
+  await edit.getByRole("textbox", { name: "Repeat", exact: true }).click();
+  await page.getByRole("option", { name: "Daily" }).click();
+  await edit.getByRole("textbox", { name: "Repeat every (days)" }).fill("2");
+  await edit.getByRole("button", { name: "Save settings" }).click();
+  await expect(edit).toBeHidden();
+  await expect(
+    page.getByText(/Every 2 days.*Last start 2026-12-31/),
+  ).toBeVisible();
+  await chooseDateTime(
+    page,
+    page.locator("body"),
+    "Preview at",
+    "2026-02-02T09:30",
+  );
+  await page.getByRole("button", { name: "Preview", exact: true }).click();
+  await expect(page.getByText(/Winning override/)).toBeVisible();
+  await page
+    .getByRole("button", { name: "Edit Weekly campaign override settings" })
+    .click();
+  await edit.getByRole("button", { name: "Cancel" }).click();
+  await expect(edit).toBeHidden();
+  await page
+    .getByRole("button", { name: "Edit Weekly campaign override settings" })
+    .click();
+  await page.evaluate(async (accessToken) => {
+    const displayId = window.location.pathname.split("/").at(-1);
+    const path = `/api/admin/displays/${displayId}/assignments`;
+    const headers = {
+      authorization: `Bearer ${accessToken}`,
+      "content-type": "application/json",
+    };
+    const list = await fetch(path, { headers });
+    const data = (await list.json()) as {
+      assignments: { id: string; mode: string; version: string }[];
+    };
+    const assignment = data.assignments.find(
+      (item) => item.mode === "override",
+    );
+    if (!assignment) throw new Error("Override assignment missing");
+    const changed = await fetch(`${path}/${assignment.id}`, {
+      method: "PATCH",
+      headers,
+      body: JSON.stringify({
+        expectedVersion: assignment.version,
+        priority: 8,
+      }),
+    });
+    if (!changed.ok)
+      throw new Error(`Concurrent edit returned ${changed.status}`);
+  }, token);
+  await edit.getByRole("textbox", { name: "Priority" }).fill("4");
+  await edit.getByRole("button", { name: "Save settings" }).click();
+  await expect(
+    edit.getByText(/Assignment changed; reload its settings/),
+  ).toBeVisible();
+  await edit.getByRole("button", { name: "Cancel" }).click();
+  await page.getByRole("button", { name: "Add playlist" }).click();
+  await drawer.getByRole("radio", { name: "Scheduled" }).check();
+  await drawer.getByRole("textbox", { name: "Playlist" }).click();
+  await page.getByRole("option", { name: "Brand loop" }).click();
+  await chooseDateTime(page, drawer, "Start", "2026-01-30T09:00");
+  await chooseDateTime(page, drawer, "End", "2026-01-30T10:00");
+  await drawer.getByRole("textbox", { name: "Repeat", exact: true }).click();
+  await page.getByRole("option", { name: "Monthly" }).click();
+  await drawer.getByRole("radio", { name: "Ordinal weekday" }).check();
+  await drawer.getByRole("textbox", { name: "Which" }).click();
+  await page.getByRole("option", { name: "Last" }).click();
+  await drawer.getByRole("textbox", { name: "Weekday" }).click();
+  await page.getByRole("option", { name: "Friday" }).click();
+  await drawer.getByRole("button", { name: "Add playlist" }).click();
+  await expect(page.getByText(/Every month on the last Fri/)).toBeVisible();
 });
 
 test("visual picker and bulk draft edits preserve duplicate items and save boundary", async ({

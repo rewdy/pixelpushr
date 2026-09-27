@@ -23,6 +23,12 @@ import {
 import { ApiError } from "../http/errors";
 import { parseJsonBody } from "../http/validation";
 import type { MediaStorage } from "../media/storage";
+import { coalesceWindows, occurrenceWindows } from "./recurrence";
+import {
+  localDateTimeSchema,
+  recurrenceFields,
+  validateRecurrence,
+} from "./recurrenceValidation";
 import {
   activeOverride,
   isScheduleActive,
@@ -47,29 +53,70 @@ const heartbeatSchema = z.object({
   health: z.enum(["playing", "empty", "error"]),
   itemId: z.string().nullable().optional(),
 });
-const scheduledSchema = z.object({
+const scheduledSchema = z.strictObject({
   playlistId: z.uuid(),
-  startLocal: z.string().regex(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2})?$/),
-  endLocal: z.string().regex(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2})?$/),
-  recurrence: z.enum(["none", "weekly"]),
-  weekInterval: z.number().int().min(1).max(52).optional(),
+  startLocal: localDateTimeSchema,
+  endLocal: localDateTimeSchema,
+  ...recurrenceFields,
   position: z.number().int().min(0).max(1000).default(0),
 });
 const overrideSchema = z
-  .object({
+  .strictObject({
     playlistId: z.uuid(),
-    startLocal: z
-      .string()
-      .regex(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2})?$/)
-      .optional(),
-    endLocal: z.string().regex(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2})?$/),
+    startLocal: localDateTimeSchema.optional(),
+    endLocal: localDateTimeSchema,
+    ...recurrenceFields,
     activateNow: z.boolean().default(false),
     priority: z.number().int().min(0).max(1000).default(0),
   })
   .refine(
-    (value) => value.activateNow || !!value.startLocal,
-    "Start time is required unless activating now",
+    (value) =>
+      (!value.activateNow || value.recurrence === "none") &&
+      (value.activateNow || !!value.startLocal),
+    "Repeating overrides require a start time and cannot Activate now",
   );
+const editAssignmentSchema = z.strictObject({
+  expectedVersion: z.string().min(1),
+  startLocal: localDateTimeSchema.optional(),
+  endLocal: localDateTimeSchema.optional(),
+  recurrence: z.enum(["none", "daily", "weekly", "monthly"]).optional(),
+  repeatInterval: recurrenceFields.repeatInterval.nullable(),
+  weekdays: recurrenceFields.weekdays.nullable(),
+  monthDay: recurrenceFields.monthDay.nullable(),
+  monthOrdinal: recurrenceFields.monthOrdinal.nullable(),
+  monthWeekday: recurrenceFields.monthWeekday.nullable(),
+  lastOccurrenceDate: recurrenceFields.lastOccurrenceDate.nullable(),
+  priority: z.number().int().min(0).max(1000).optional(),
+});
+const assignmentVersion = (
+  assignment: typeof assignments.$inferSelect,
+  schedule: typeof scheduleRules.$inferSelect,
+) =>
+  createHash("sha256")
+    .update(
+      JSON.stringify({
+        id: assignment.id,
+        displayId: assignment.displayId,
+        playlistId: assignment.playlistId,
+        mode: assignment.mode,
+        position: assignment.position,
+        priority: assignment.priority,
+        enabled: assignment.enabled,
+        scheduleRuleId: assignment.scheduleRuleId,
+        recurrence: schedule.recurrence,
+        startAt: schedule.startAt.toISOString(),
+        endAt: schedule.endAt.toISOString(),
+        timezone: schedule.timezone,
+        repeatInterval: schedule.repeatInterval,
+        weekdays: schedule.weekdays,
+        monthDay: schedule.monthDay,
+        monthOrdinal: schedule.monthOrdinal,
+        monthWeekday: schedule.monthWeekday,
+        lastOccurrenceDate: schedule.lastOccurrenceDate,
+        recurrenceUntil: schedule.recurrenceUntil?.toISOString() ?? null,
+      }),
+    )
+    .digest("hex");
 const hashToken = (token: string) =>
   createHash("sha256").update(token).digest("hex");
 const playerUrl = (base: string, token: string) =>
@@ -143,26 +190,39 @@ export const resolveAlwaysManifest = async (
         Number(right.assignment.mode !== "always"),
     )
     .map(toItem);
-  const overrides = new Map<string, OverrideWindow>();
+  const overrides = new Map<
+    string,
+    {
+      priority: number;
+      schedule: typeof scheduleRules.$inferSelect;
+      queue: ManifestItem[];
+    }
+  >();
   for (const row of rows) {
-    if (
-      row.assignment.mode !== "override" ||
-      !row.schedule ||
-      row.schedule.endAt <= at
-    )
-      continue;
+    if (row.assignment.mode !== "override" || !row.schedule) continue;
     const existing = overrides.get(row.assignment.id);
     if (existing) existing.queue.push(toItem(row));
     else
       overrides.set(row.assignment.id, {
-        assignmentId: row.assignment.id,
         priority: row.assignment.priority,
-        startAt: row.schedule.startAt.toISOString(),
-        endAt: row.schedule.endAt.toISOString(),
+        schedule: row.schedule,
         queue: [toItem(row)],
       });
   }
-  const overrideWindows = [...overrides.values()].sort(
+  const lookaheadEnd = new Date(at.getTime() + 14 * 86_400_000);
+  const overrideWindows: OverrideWindow[] = [...overrides].flatMap(
+    ([assignmentId, { priority, schedule, queue }]) =>
+      coalesceWindows(
+        occurrenceWindows(schedule, organization.timezone, at, lookaheadEnd),
+      ).map(({ start, end }) => ({
+        assignmentId,
+        priority,
+        startAt: start.toISOString(),
+        endAt: end.toISOString(),
+        queue,
+      })),
+  );
+  overrideWindows.sort(
     (left, right) =>
       left.startAt.localeCompare(right.startAt) ||
       right.priority - left.priority ||
@@ -288,9 +348,154 @@ export const registerDisplayRoutes = (
         ...assignment,
         playlistName: playlist.name,
         schedule,
+        version: schedule ? assignmentVersion(assignment, schedule) : null,
       })),
     });
   });
+
+  app.patch(
+    "/admin/displays/:id/assignments/:assignmentId",
+    async (context) => {
+      const { membership } = await getAdmin(context, db, auth);
+      const body = await parseJsonBody(context, editAssignmentSchema);
+      const display = await db.query.displays.findFirst({
+        where: and(
+          eq(displays.organizationId, membership.organizationId),
+          eq(displays.id, context.req.param("id")),
+        ),
+      });
+      if (!display) throw new ApiError(404, "not_found", "Display not found");
+      return db.transaction(async (transaction) => {
+        const [assignment] = await transaction
+          .select()
+          .from(assignments)
+          .where(
+            and(
+              eq(assignments.id, context.req.param("assignmentId")),
+              eq(assignments.displayId, display.id),
+            ),
+          )
+          .for("update");
+        if (
+          !assignment ||
+          assignment.mode === "always" ||
+          !assignment.scheduleRuleId
+        )
+          throw new ApiError(404, "not_found", "Editable assignment not found");
+        const [schedule] = await transaction
+          .select()
+          .from(scheduleRules)
+          .where(
+            and(
+              eq(scheduleRules.id, assignment.scheduleRuleId),
+              eq(scheduleRules.organizationId, membership.organizationId),
+            ),
+          )
+          .for("update");
+        if (!schedule)
+          throw new ApiError(404, "not_found", "Assignment schedule not found");
+        if (assignmentVersion(assignment, schedule) !== body.expectedVersion)
+          throw new ApiError(
+            409,
+            "conflict",
+            "Assignment changed; reload its settings before saving",
+          );
+        if (assignment.mode !== "override" && body.priority !== undefined)
+          throw new ApiError(
+            400,
+            "invalid_request",
+            "Priority applies only to Overrides",
+          );
+        if (Object.keys(body).length === 1) {
+          const playlist = await transaction.query.playlists.findFirst({
+            where: eq(playlists.id, assignment.playlistId),
+          });
+          return context.json({
+            assignment: {
+              ...assignment,
+              playlistName: playlist?.name ?? "",
+              schedule,
+              version: assignmentVersion(assignment, schedule),
+            },
+          });
+        }
+        const recurrence = body.recurrence ?? schedule.recurrence;
+        const frequencyChanged = recurrence !== schedule.recurrence;
+        const retained = <T>(
+          newValue: T | null | undefined,
+          oldValue: T | null,
+        ) =>
+          newValue === undefined
+            ? frequencyChanged
+              ? undefined
+              : (oldValue ?? undefined)
+            : (newValue ?? undefined);
+        let startAt: Date;
+        let endAt: Date;
+        try {
+          startAt = body.startLocal
+            ? localTimeToInstant(body.startLocal, schedule.timezone)
+            : schedule.startAt;
+          endAt = body.endLocal
+            ? localTimeToInstant(body.endLocal, schedule.timezone)
+            : schedule.endAt;
+        } catch {
+          throw new ApiError(
+            400,
+            "invalid_request",
+            "Invalid local schedule time",
+          );
+        }
+        const next = validateRecurrence(
+          {
+            recurrence,
+            repeatInterval: retained(
+              body.repeatInterval,
+              schedule.repeatInterval,
+            ),
+            weekdays: retained(body.weekdays, schedule.weekdays),
+            monthDay: retained(body.monthDay, schedule.monthDay),
+            monthOrdinal: retained(body.monthOrdinal, schedule.monthOrdinal),
+            monthWeekday: retained(body.monthWeekday, schedule.monthWeekday),
+            lastOccurrenceDate: retained(
+              body.lastOccurrenceDate,
+              schedule.lastOccurrenceDate,
+            ),
+          },
+          startAt,
+          endAt,
+          schedule.timezone,
+        );
+        const [savedSchedule] = await transaction
+          .update(scheduleRules)
+          .set({ ...next, startAt, endAt })
+          .where(eq(scheduleRules.id, schedule.id))
+          .returning();
+        if (!savedSchedule) throw new Error("Schedule update returned no row");
+        let savedAssignment = assignment;
+        if (body.priority !== undefined) {
+          const [updated] = await transaction
+            .update(assignments)
+            .set({ priority: body.priority })
+            .where(eq(assignments.id, assignment.id))
+            .returning();
+          if (!updated) throw new Error("Assignment update returned no row");
+          savedAssignment = updated;
+        }
+        const playlist = await transaction.query.playlists.findFirst({
+          where: eq(playlists.id, savedAssignment.playlistId),
+        });
+        return context.json({
+          assignment: {
+            ...savedAssignment,
+            playlistName: playlist?.name ?? "",
+            schedule: savedSchedule,
+            version: assignmentVersion(savedAssignment, savedSchedule),
+          },
+        });
+      });
+    },
+  );
 
   app.post("/admin/displays/:id/schedules", async (context) => {
     const { membership } = await getAdmin(context, db, auth);
@@ -320,34 +525,22 @@ export const registerDisplayRoutes = (
     } catch {
       throw new ApiError(400, "invalid_request", "Invalid local schedule time");
     }
-    if (endAt <= startAt)
-      throw new ApiError(
-        400,
-        "invalid_request",
-        "Schedule end must be after start",
-      );
-    if (
-      body.recurrence === "weekly" &&
-      endAt.getTime() - startAt.getTime() >
-        (body.weekInterval ?? 1) * 7 * 24 * 60 * 60 * 1000 + 60 * 60 * 1000
-    )
-      throw new ApiError(
-        400,
-        "invalid_request",
-        "Weekly window cannot exceed its repeat interval",
-      );
+    const recurrence = validateRecurrence(
+      body,
+      startAt,
+      endAt,
+      organization.timezone,
+    );
     const result = await db.transaction(async (transaction) => {
       const rule = firstRow(
         await transaction
           .insert(scheduleRules)
           .values({
             organizationId: organization.id,
-            recurrence: body.recurrence,
+            ...recurrence,
             startAt,
             endAt,
             timezone: organization.timezone,
-            weekInterval:
-              body.recurrence === "weekly" ? (body.weekInterval ?? 1) : null,
           })
           .returning(),
       );
@@ -444,19 +637,19 @@ export const registerDisplayRoutes = (
     } catch {
       throw new ApiError(400, "invalid_request", "Invalid local override time");
     }
-    if (endAt <= startAt)
-      throw new ApiError(
-        400,
-        "invalid_request",
-        "Override expiration must be after its start",
-      );
+    const recurrence = validateRecurrence(
+      body,
+      startAt,
+      endAt,
+      organization.timezone,
+    );
     const result = await db.transaction(async (transaction) => {
       const rule = firstRow(
         await transaction
           .insert(scheduleRules)
           .values({
             organizationId: organization.id,
-            recurrence: "none",
+            ...recurrence,
             startAt,
             endAt,
             timezone: organization.timezone,
