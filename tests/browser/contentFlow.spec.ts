@@ -102,9 +102,28 @@ test("owner sets up the workspace and invites an administrator in the browser", 
   await page
     .getByRole("textbox", { name: "Organization name" })
     .fill("Browser Test");
-  await page.getByRole("textbox", { name: "Timezone" }).fill("America/Chicago");
+  const timezoneInput = page.getByRole("textbox", { name: "Timezone" });
+  const browserZone = await page.evaluate(
+    () => Intl.DateTimeFormat().resolvedOptions().timeZone,
+  );
+  await expect(timezoneInput).toHaveValue(new RegExp(browserZone));
+  await timezoneInput.fill("Chicago");
+  await timezoneInput.press("ArrowDown");
+  await timezoneInput.press("Enter");
+  await expect(timezoneInput).toHaveValue(
+    /America\/Chicago · UTC[-+]\d{2}:\d{2}/,
+  );
   await page.getByRole("button", { name: "Create workspace" }).click();
   await expect(page.getByRole("heading", { name: "Overview" })).toBeVisible();
+  const savedZone = await page.evaluate(async () => {
+    const response = await fetch("/api/admin/me", {
+      headers: {
+        authorization: `Bearer ${sessionStorage.getItem("pixelpushr-admin-session")}`,
+      },
+    });
+    return (await response.json()) as { organization: { timezone: string } };
+  });
+  expect(savedZone.organization.timezone).toBe("America/Chicago");
   token = await page.evaluate(
     () => sessionStorage.getItem("pixelpushr-admin-session") ?? "",
   );

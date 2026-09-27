@@ -14,6 +14,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { Link, useLocation } from "wouter";
 import { requestJson, setToken } from "../../helpers/api";
+import { TimezoneSelect } from "../TimezoneSelect/TimezoneSelect";
 
 type Session = { accessToken: string };
 
@@ -216,15 +217,13 @@ export const SetupScreen = () => {
             value={name}
             onChange={(event) => setName(event.currentTarget.value)}
           />
-          <TextInput
-            label="Timezone"
-            description="IANA timezone, such as America/Chicago"
-            required
-            value={timezone}
-            onChange={(event) => setTimezone(event.currentTarget.value)}
-          />
+          <TimezoneSelect value={timezone} onChange={setTimezone} required />
           {setup.error && <Alert color="red">{setup.error.message}</Alert>}
-          <Button loading={setup.isPending} onClick={() => setup.mutate()}>
+          <Button
+            loading={setup.isPending}
+            disabled={!timezone}
+            onClick={() => setup.mutate()}
+          >
             Create workspace
           </Button>
         </Stack>

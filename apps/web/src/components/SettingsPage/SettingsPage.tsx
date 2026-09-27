@@ -10,6 +10,7 @@ import {
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { requestJson } from "../../helpers/api";
+import { TimezoneSelect } from "../TimezoneSelect/TimezoneSelect";
 
 /** Edits the single organization's display name and schedule timezone. */
 export const SettingsPage = ({
@@ -50,11 +51,9 @@ export const SettingsPage = ({
             onChange={(event) => setDraftName(event.currentTarget.value)}
             disabled={role !== "owner"}
           />
-          <TextInput
-            label="Timezone"
-            description="IANA timezone used for schedules"
+          <TimezoneSelect
             value={draftTimezone}
-            onChange={(event) => setDraftTimezone(event.currentTarget.value)}
+            onChange={setDraftTimezone}
             disabled={role !== "owner"}
           />
           {save.error && <Alert color="red">{save.error.message}</Alert>}
@@ -63,6 +62,7 @@ export const SettingsPage = ({
             <Button
               style={{ alignSelf: "flex-start" }}
               loading={save.isPending}
+              disabled={!draftTimezone}
               onClick={() => save.mutate()}
             >
               Save changes
