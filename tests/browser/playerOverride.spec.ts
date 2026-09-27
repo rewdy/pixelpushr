@@ -20,7 +20,7 @@ test("override cuts in and expires on server time, including an offline reload",
 }) => {
   const serverSkewMs = 60000;
   const startAt = new Date(Date.now() + serverSkewMs + 1300).toISOString();
-  const endAt = new Date(Date.now() + serverSkewMs + 2600).toISOString();
+  const endAt = new Date(Date.now() + serverSkewMs + 6000).toISOString();
   const window = {
     assignmentId: "countdown",
     priority: 10,
@@ -70,7 +70,9 @@ test("override cuts in and expires on server time, including an offline reload",
       : route.abort(),
   );
   await page.goto("/player/timed-override");
-  await expect(page.locator('img[src$="brand.png"]')).toBeVisible();
+  await expect(
+    page.locator('img[data-player-layer="current"][src$="brand.png"]'),
+  ).toBeVisible();
   await expect
     .poll(async () =>
       page.evaluate(async () => {
@@ -82,16 +84,20 @@ test("override cuts in and expires on server time, including an offline reload",
       }),
     )
     .toBe(true);
-  await expect(page.locator('img[src$="countdown.png"]')).toBeVisible({
+  await expect(
+    page.locator('img[data-player-layer="current"][src$="countdown.png"]'),
+  ).toBeVisible({
     timeout: 2500,
   });
   online = false;
   await page.reload();
   await page.keyboard.press("d");
-  await expect(page.locator('img[src^="blob:"]')).toBeVisible();
+  await expect(
+    page.locator('img[data-player-layer="current"][src^="blob:"]'),
+  ).toBeVisible();
   await expect(page.getByText(/offline · countdown ·/)).toBeVisible();
   await expect(page.getByText(/offline · brand ·/)).toBeVisible({
-    timeout: 3500,
+    timeout: 7000,
   });
-  await expect(page.locator("img")).toBeVisible();
+  await expect(page.locator('img[data-player-layer="current"]')).toBeVisible();
 });

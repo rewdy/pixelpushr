@@ -6,6 +6,8 @@
   overflow: hidden;
 }
 .media {
+  position: absolute;
+  inset: 0;
   width: 100vw;
   height: 100vh;
   object-fit: contain;
@@ -21,6 +23,7 @@
 }
 .diagnostic {
   position: fixed;
+  z-index: 2;
   right: 12px;
   bottom: 12px;
   padding: 4px 8px;

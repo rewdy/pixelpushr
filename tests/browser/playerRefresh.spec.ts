@@ -39,11 +39,17 @@ test("player observes reassignment at a queue boundary", async ({ page }) => {
     route.fulfill({ body: png, contentType: "image/png" }),
   );
   await page.goto("/player/refresh");
-  await expect(page.locator('img[src$="first.png"]')).toBeVisible();
+  await expect(
+    page.locator('img[data-player-layer="current"][src$="first.png"]'),
+  ).toBeVisible();
   current = manifest("v2", "second");
   await page.waitForTimeout(500);
-  await expect(page.locator('img[src$="first.png"]')).toBeVisible();
-  await expect(page.locator('img[src$="second.png"]')).toBeVisible({
+  await expect(
+    page.locator('img[data-player-layer="current"][src$="first.png"]'),
+  ).toBeVisible();
+  await expect(
+    page.locator('img[data-player-layer="current"][src$="second.png"]'),
+  ).toBeVisible({
     timeout: 5000,
   });
 });
@@ -67,7 +73,7 @@ test("cached manifest and media survive API and media outage on reload", async (
       : route.abort(),
   );
   await page.goto("/player/offline-fixture");
-  await expect(page.locator("img")).toBeVisible();
+  await expect(page.locator('img[data-player-layer="current"]')).toBeVisible();
   await expect
     .poll(async () =>
       page.evaluate(
@@ -81,10 +87,12 @@ test("cached manifest and media survive API and media outage on reload", async (
     .toBe(true);
   online = false;
   await page.reload();
-  await expect(page.locator('img[src^="blob:"]')).toBeVisible();
+  await expect(
+    page.locator('img[data-player-layer="current"][src^="blob:"]'),
+  ).toBeVisible();
   expect(
     await page
-      .locator("img")
+      .locator('img[data-player-layer="current"]')
       .evaluate((image: HTMLImageElement) => image.naturalWidth),
   ).toBeGreaterThan(0);
 });

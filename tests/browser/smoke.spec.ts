@@ -47,7 +47,7 @@ test("public player route loads", async ({ page }) => {
     route.fulfill({ json: { received: true } }),
   );
   await page.goto("/player/fixture-token");
-  await expect(page.locator("img")).toBeVisible();
+  await expect(page.locator('img[data-player-layer="current"]')).toBeVisible();
 });
 
 test("owner can send an invitation through the console", async ({ page }) => {

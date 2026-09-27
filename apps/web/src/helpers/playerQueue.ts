@@ -88,3 +88,30 @@ export const advanceQueue = (state: QueueState): QueueState => {
     return { ...initialQueue(state.pending), cycle: state.cycle + 1 };
   return { ...state, index: 0, cycle: state.cycle + 1 };
 };
+
+export const playerCrossfadeMs = 500;
+
+export type OverlapPlan = {
+  next: ManifestItem;
+  nextState: QueueState;
+  startMs: number;
+  durationMs: number;
+};
+
+/** Plans an overlap inside an outgoing item's remaining time, without delaying its boundary. */
+export const planItemOverlap = (
+  state: QueueState,
+  remainingMs: number,
+): OverlapPlan | null => {
+  if (!Number.isFinite(remainingMs) || remainingMs <= 0) return null;
+  const nextState = advanceQueue(state);
+  const next = nextState.queue[nextState.index];
+  if (!next) return null;
+  const durationMs = Math.min(playerCrossfadeMs, remainingMs);
+  return {
+    next,
+    nextState,
+    startMs: remainingMs - durationMs,
+    durationMs,
+  };
+};

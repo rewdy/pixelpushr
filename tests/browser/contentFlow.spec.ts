@@ -295,10 +295,12 @@ test("upload media and publish an ordered playlist through the real API", async 
   if (!playerUrl) throw new Error("Player link has no URL");
   const player = await page.context().newPage();
   await player.goto(playerUrl);
-  await expect(player.locator("img")).toBeVisible();
+  await expect(
+    player.locator('img[data-player-layer="current"]'),
+  ).toBeVisible();
   expect(
     await player
-      .locator("img")
+      .locator('img[data-player-layer="current"]')
       .evaluate((image: HTMLImageElement) => image.naturalWidth),
   ).toBeGreaterThan(0);
   await player.close();

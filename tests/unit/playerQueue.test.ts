@@ -4,6 +4,7 @@ import {
   advanceQueue,
   applyTimedOverride,
   initialQueue,
+  planItemOverlap,
   receiveManifest,
 } from "../../apps/web/src/helpers/playerQueue";
 
@@ -16,6 +17,32 @@ const item = (id: string) => ({
   imageDurationMs: 1000,
   videoMode: null,
   repeatDurationMs: null,
+});
+
+test("500 ms overlap stays inside each configured item boundary", () => {
+  const first = initialQueue(manifest("normal", ["a", "b"]));
+  const planned = planItemOverlap(first, 1000);
+  expect(planned?.next.id).toBe("b");
+  expect(planned?.startMs).toBe(500);
+  expect(planned?.durationMs).toBe(500);
+  expect(planned?.startMs + (planned?.durationMs ?? 0)).toBe(1000);
+  expect(planItemOverlap(first, 300)?.durationMs).toBe(300);
+  expect(planItemOverlap(first, 300)?.startMs).toBe(0);
+  expect(
+    planItemOverlap(initialQueue(manifest("loop", ["only"])), 1000)?.next.id,
+  ).toBe("only");
+  expect(planItemOverlap(first, Number.NaN)).toBeNull();
+  expect(planItemOverlap(initialQueue(manifest("empty", [])), 1000)).toBeNull();
+});
+
+test("overlap targets the latest pending normal queue at rollover", () => {
+  const initial = initialQueue(manifest("one", ["a", "b"]));
+  const last = advanceQueue(initial);
+  const pending = receiveManifest(last, manifest("two", ["c"]));
+  expect(planItemOverlap(pending, 1000)?.next.id).toBe("c");
+  expect(planItemOverlap(pending, 1000)?.nextState.queue[0]?.id).toBe("c");
+  expect(planItemOverlap(pending, 1000)?.durationMs).toBe(500);
+  expect(advanceQueue(pending).queue[0]?.id).toBe("c");
 });
 const manifest = (version: string, ids: string[]): PlayerManifest => ({
   display: { id: "d", name: "Lobby" },

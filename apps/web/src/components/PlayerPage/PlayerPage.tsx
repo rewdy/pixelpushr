@@ -1,9 +1,11 @@
-import type { PlayerManifest } from "@pixelpushr/contracts/manifest";
+import type {
+  ManifestItem,
+  PlayerManifest,
+} from "@pixelpushr/contracts/manifest";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useParams } from "wouter";
 import {
   cacheManifest,
-  offlineMediaUrl,
   readCachedManifest,
   readClockOffset,
 } from "../../helpers/playerCache";
@@ -11,9 +13,12 @@ import {
   advanceQueue,
   applyTimedOverride,
   initialQueue,
+  planItemOverlap,
+  playerCrossfadeMs,
   type QueueState,
   receiveManifest,
 } from "../../helpers/playerQueue";
+import { PlayerMediaLayer } from "./PlayerMediaLayer";
 import classes from "./PlayerPage.module.css";
 
 const pollMs = Math.max(
@@ -22,26 +27,75 @@ const pollMs = Math.max(
 );
 const heartbeatMs = 30000;
 
+type Preload = {
+  sourceKey: string;
+  targetKey: string;
+  signature: string;
+  item: ManifestItem;
+  ready: boolean;
+  failed: boolean;
+  started: boolean;
+  fadeMs: number;
+};
+
+const queueItemKey = (state: QueueState): string | null => {
+  const item = state.queue[state.index];
+  return item
+    ? `${state.overrideId ?? "normal"}:${item.id}:${state.cycle}:${item.url}:${item.imageDurationMs}:${item.videoMode}:${item.repeatDurationMs}`
+    : null;
+};
+
 /** Runs public, control-free playback for a display token. */
 export const PlayerPage = () => {
   const { token } = useParams<{ token: string }>();
   const [state, setState] = useState<QueueState | null>(null);
   const [offline, setOffline] = useState(false);
   const [unavailable, setUnavailable] = useState(false);
-  const [mediaUrl, setMediaUrl] = useState<string | null>(null);
+  const [preload, setPreload] = useState<Preload | null>(null);
   const [diagnostics, setDiagnostics] = useState(false);
   const stateRef = useRef<QueueState | null>(null);
-  const videoRef = useRef<HTMLVideoElement | null>(null);
   const videoAdvanced = useRef(false);
   const videoFallbackTimer = useRef<number | null>(null);
+  const videoFadeTimer = useRef<number | null>(null);
+  const boundary = useRef<{ key: string; at: number } | null>(null);
+  const failedUrls = useRef(new Set<string>());
   const clockOffsetMs = useRef(0);
   const item = state?.queue[state.index];
-  const itemKey = item ? `${item.id}:${state?.cycle}` : null;
-  const itemUrl = item?.url;
+  const itemKey = state ? queueItemKey(state) : null;
   const itemKind = item?.kind;
   const imageDurationMs = item?.imageDurationMs;
   const videoMode = item?.videoMode;
   const repeatDurationMs = item?.repeatDurationMs;
+  const nextState = state ? advanceQueue(state) : null;
+  const nextItem = nextState?.queue[nextState.index];
+  const nextKey = nextState ? queueItemKey(nextState) : null;
+  const nextSignature = nextItem
+    ? JSON.stringify([
+        nextItem.id,
+        nextItem.url,
+        nextItem.kind,
+        nextItem.imageDurationMs,
+        nextItem.videoMode,
+        nextItem.repeatDurationMs,
+      ])
+    : null;
+  const timedDurationMs =
+    itemKind === "image"
+      ? imageDurationMs
+      : videoMode === "repeat"
+        ? repeatDurationMs
+        : null;
+  const overlapStartMs =
+    state && timedDurationMs
+      ? planItemOverlap(state, timedDurationMs)?.startMs
+      : null;
+  const visiblePreload =
+    preload?.sourceKey === itemKey &&
+    preload.targetKey === nextKey &&
+    preload.signature === nextSignature &&
+    !preload.failed
+      ? preload
+      : null;
 
   const updateState = useCallback(
     (update: (current: QueueState | null) => QueueState | null) => {
@@ -54,9 +108,56 @@ export const PlayerPage = () => {
     [],
   );
   const advance = useCallback(
-    () => updateState((current) => (current ? advanceQueue(current) : current)),
+    (expectedKey?: string) =>
+      updateState((current) => {
+        if (!current || (expectedKey && queueItemKey(current) !== expectedKey))
+          return current;
+        let next = advanceQueue(current);
+        for (let count = 0; count < next.queue.length; count++) {
+          const target = next.queue[next.index];
+          if (!target || !failedUrls.current.has(target.url)) break;
+          next = advanceQueue(next);
+        }
+        const target = next.queue[next.index];
+        return target && failedUrls.current.has(target.url) ? current : next;
+      }),
     [updateState],
   );
+
+  const tryStartFade = useCallback(() => {
+    const currentBoundary = boundary.current;
+    if (!currentBoundary) return;
+    setPreload((current) => {
+      if (
+        !current ||
+        current.sourceKey !== currentBoundary.key ||
+        !current.ready ||
+        current.failed ||
+        current.started
+      )
+        return current;
+      const remaining = currentBoundary.at - performance.now();
+      if (remaining <= 0 || remaining > playerCrossfadeMs) return current;
+      return { ...current, started: true, fadeMs: remaining };
+    });
+  }, []);
+
+  useEffect(() => {
+    setPreload(
+      itemKey && nextKey && nextItem && nextSignature
+        ? {
+            sourceKey: itemKey,
+            targetKey: nextKey,
+            signature: nextSignature,
+            item: nextItem,
+            ready: false,
+            failed: false,
+            started: false,
+            fadeMs: 0,
+          }
+        : null,
+    );
+  }, [itemKey, nextKey, nextSignature, nextItem]);
 
   useEffect(() => {
     if (itemKey === null) return;
@@ -65,6 +166,10 @@ export const PlayerPage = () => {
       if (videoFallbackTimer.current !== null)
         window.clearTimeout(videoFallbackTimer.current);
       videoFallbackTimer.current = null;
+      if (videoFadeTimer.current !== null)
+        window.clearTimeout(videoFadeTimer.current);
+      videoFadeTimer.current = null;
+      boundary.current = null;
     };
   }, [itemKey]);
 
@@ -169,98 +274,102 @@ export const PlayerPage = () => {
   }, []);
 
   useEffect(() => {
-    if (!itemKey || !itemUrl) {
-      setMediaUrl(null);
-      return;
-    }
-    if (!offline) {
-      setMediaUrl(itemUrl);
-      return;
-    }
-    let active = true;
-    let objectUrl: string | null = null;
-    void offlineMediaUrl(itemUrl).then((url) => {
-      if (active) {
-        objectUrl = url;
-        setMediaUrl(url ?? itemUrl);
-      } else if (url) URL.revokeObjectURL(url);
-    });
+    if (!itemKey || !timedDurationMs) return;
+    const at =
+      boundary.current?.key === itemKey
+        ? boundary.current.at
+        : performance.now() + timedDurationMs;
+    boundary.current = { key: itemKey, at };
+    const remaining = Math.max(0, at - performance.now());
+    const fadeTimer =
+      overlapStartMs !== null
+        ? window.setTimeout(
+            tryStartFade,
+            Math.max(0, remaining - playerCrossfadeMs),
+          )
+        : null;
+    const timer = window.setTimeout(() => advance(itemKey), remaining);
     return () => {
-      active = false;
-      if (objectUrl) URL.revokeObjectURL(objectUrl);
+      window.clearTimeout(timer);
+      if (fadeTimer !== null) window.clearTimeout(fadeTimer);
     };
-  }, [itemKey, itemUrl, offline]);
+  }, [itemKey, timedDurationMs, overlapStartMs, advance, tryStartFade]);
 
-  useEffect(() => {
-    if (!itemKey) return;
-    const duration =
-      itemKind === "image"
-        ? imageDurationMs
-        : videoMode === "repeat"
-          ? repeatDurationMs
-          : null;
-    if (!duration) return;
-    const timer = window.setTimeout(advance, duration);
-    return () => window.clearTimeout(timer);
-  }, [
-    itemKey,
-    itemKind,
-    imageDurationMs,
-    videoMode,
-    repeatDurationMs,
-    advance,
-  ]);
-
-  const onMediaError = () => {
-    if (item && !offline && !mediaUrl?.startsWith("blob:")) {
-      void offlineMediaUrl(item.url).then((url) => {
-        if (url) setMediaUrl(url);
-        else advance();
-      });
-    } else advance();
-  };
+  const onMediaError = useCallback(
+    (url: string, key: string) => {
+      failedUrls.current.add(url);
+      advance(key);
+    },
+    [advance],
+  );
   const finishVideoOnce = () => {
     if (videoAdvanced.current) return;
     videoAdvanced.current = true;
     if (videoFallbackTimer.current !== null)
       window.clearTimeout(videoFallbackTimer.current);
-    advance();
+    advance(itemKey ?? undefined);
   };
-  const onVideoEnded = () => {
-    if (item?.videoMode === "repeat") {
-      if (videoRef.current) {
-        videoRef.current.currentTime = 0;
-        void videoRef.current.play().catch(onMediaError);
-      }
-    } else finishVideoOnce();
-  };
-
-  const onVideoTimeUpdate = () => {
-    const video = videoRef.current;
+  const onVideoTimeUpdate = (video: HTMLVideoElement) => {
     if (
       item?.videoMode === "once" &&
-      video &&
       Number.isFinite(video.duration) &&
-      video.currentTime >= video.duration - 0.05 &&
       !videoAdvanced.current
     ) {
-      finishVideoOnce();
+      const remaining = (video.duration - video.currentTime) * 1000;
+      if (itemKey && remaining > 0)
+        boundary.current = { key: itemKey, at: performance.now() + remaining };
+      if (remaining <= playerCrossfadeMs && remaining > 0) tryStartFade();
+      if (remaining <= 50) finishVideoOnce();
     }
   };
 
-  const onVideoPlaying = () => {
-    const video = videoRef.current;
+  const onVideoPlaying = (video: HTMLVideoElement) => {
     if (
       item?.videoMode !== "once" ||
-      !video ||
-      !Number.isFinite(video.duration)
+      !Number.isFinite(video.duration) ||
+      video.duration <= 0
     )
       return;
     if (videoFallbackTimer.current !== null)
       window.clearTimeout(videoFallbackTimer.current);
+    if (videoFadeTimer.current !== null)
+      window.clearTimeout(videoFadeTimer.current);
+    const remaining = (video.duration - video.currentTime) * 1000;
+    if (itemKey)
+      boundary.current = { key: itemKey, at: performance.now() + remaining };
+    videoFadeTimer.current = window.setTimeout(
+      tryStartFade,
+      Math.max(0, remaining - playerCrossfadeMs),
+    );
     videoFallbackTimer.current = window.setTimeout(
       finishVideoOnce,
-      Math.max(100, (video.duration - video.currentTime) * 1000 + 250),
+      Math.max(100, remaining + 250),
+    );
+  };
+
+  const onIncomingReady = () => {
+    setPreload((current) => {
+      if (!current || current !== visiblePreload || current.ready)
+        return current;
+      const currentBoundary = boundary.current;
+      const remaining =
+        currentBoundary?.key === current.sourceKey
+          ? currentBoundary.at - performance.now()
+          : 0;
+      return {
+        ...current,
+        ready: true,
+        started: remaining > 0 && remaining <= playerCrossfadeMs,
+        fadeMs: Math.max(0, Math.min(playerCrossfadeMs, remaining)),
+      };
+    });
+  };
+
+  const onIncomingFailed = () => {
+    if (!visiblePreload) return;
+    failedUrls.current.add(visiblePreload.item.url);
+    setPreload((current) =>
+      current === visiblePreload ? { ...current, failed: true } : current,
     );
   };
 
@@ -272,28 +381,39 @@ export const PlayerPage = () => {
         <div className={classes.empty}>
           {offline ? "Waiting for cached content" : "Waiting for a playlist"}
         </div>
-      ) : !mediaUrl ? null : item.kind === "image" ? (
-        <img
-          key={itemKey}
-          src={mediaUrl}
-          alt=""
-          className={classes.media}
-          onError={onMediaError}
-        />
       ) : (
-        <video
-          key={itemKey}
-          ref={videoRef}
-          src={mediaUrl}
-          autoPlay
-          muted
-          playsInline
-          className={classes.media}
-          onEnded={onVideoEnded}
-          onTimeUpdate={onVideoTimeUpdate}
-          onPlaying={onVideoPlaying}
-          onError={onMediaError}
-        />
+        <>
+          <PlayerMediaLayer
+            key={itemKey}
+            item={item}
+            offline={offline}
+            active
+            fadingIn={false}
+            fadingOut={!!visiblePreload?.started}
+            fadeMs={visiblePreload?.fadeMs ?? 0}
+            onReady={() => undefined}
+            onFailed={() => onMediaError(item.url, itemKey ?? "")}
+            onVideoEnded={finishVideoOnce}
+            onVideoTimeUpdate={onVideoTimeUpdate}
+            onVideoPlaying={onVideoPlaying}
+          />
+          {visiblePreload && (
+            <PlayerMediaLayer
+              key={visiblePreload.targetKey}
+              item={visiblePreload.item}
+              offline={offline}
+              active={false}
+              fadingIn={visiblePreload.started}
+              fadingOut={false}
+              fadeMs={visiblePreload.fadeMs}
+              onReady={onIncomingReady}
+              onFailed={onIncomingFailed}
+              onVideoEnded={() => undefined}
+              onVideoTimeUpdate={() => undefined}
+              onVideoPlaying={() => undefined}
+            />
+          )}
+        </>
       )}
       {diagnostics && (
         <div className={classes.diagnostic}>
