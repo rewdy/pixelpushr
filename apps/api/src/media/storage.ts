@@ -39,16 +39,22 @@ type S3Options = {
 
 /** Adapts AWS S3 or local MinIO to the media storage boundary. */
 export const createS3Storage = (options: S3Options): MediaStorage => {
+  if (options.endpoint && (!options.accessKeyId || !options.secretAccessKey))
+    throw new Error("S3 endpoint requires access credentials");
+  const credentials =
+    options.accessKeyId && options.secretAccessKey
+      ? {
+          accessKeyId: options.accessKeyId,
+          secretAccessKey: options.secretAccessKey,
+        }
+      : undefined;
   const client = new S3Client({
     region: options.region,
     ...(options.endpoint
       ? {
           endpoint: options.endpoint,
           forcePathStyle: true,
-          credentials: {
-            accessKeyId: options.accessKeyId!,
-            secretAccessKey: options.secretAccessKey!,
-          },
+          credentials,
         }
       : {}),
   });

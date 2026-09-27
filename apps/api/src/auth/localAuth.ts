@@ -1,5 +1,5 @@
-import { SignJWT, jwtVerify } from "jose";
 import { eq } from "drizzle-orm";
+import { jwtVerify, SignJWT } from "jose";
 import type { Database } from "../db/client";
 import { users } from "../db/schema";
 import { ApiError } from "../http/errors";
@@ -20,13 +20,11 @@ export const createLocalAuth = (
       if (existing)
         throw new ApiError(409, "conflict", "Account already exists");
       const subject = crypto.randomUUID();
-      await db
-        .insert(users)
-        .values({
-          subject,
-          email: normalized,
-          localPasswordHash: await Bun.password.hash(password),
-        });
+      await db.insert(users).values({
+        subject,
+        email: normalized,
+        localPasswordHash: await Bun.password.hash(password),
+      });
       return { subject, confirmationRequired: false };
     },
     confirm: async () => undefined,

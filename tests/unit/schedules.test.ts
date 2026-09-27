@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import type { OverrideWindow } from "@pixelpushr/contracts/manifest";
 import type { ScheduleRule } from "../../apps/api/src/displays/schedules";
 import {
   activeOverride,
@@ -6,7 +7,6 @@ import {
   localTimeToInstant,
   overrideTransitions,
 } from "../../apps/api/src/displays/schedules";
-import type { OverrideWindow } from "@pixelpushr/contracts/manifest";
 
 const weekly = (
   startLocal: string,

@@ -179,7 +179,8 @@ describe("first-run organization setup", () => {
     });
     const adminToken = ((await adminLogin.json()) as { accessToken: string })
       .accessToken;
-    const token = invitationBody.url.split("/").at(-1)!;
+    const token = invitationBody.url.split("/").at(-1);
+    if (!token) throw new Error("Invitation URL has no token");
     const accept = () =>
       app.request("/invitations/accept", {
         method: "POST",
@@ -678,7 +679,8 @@ describe("first-run organization setup", () => {
       body: JSON.stringify({ playlistIds: [readyPlaylistId, extraId] }),
     });
     expect(assigned.status).toBe(200);
-    const token = first.playerUrl.split("/").at(-1)!;
+    const token = first.playerUrl.split("/").at(-1);
+    if (!token) throw new Error("Player URL has no token");
     const manifestResponse = await app.request(`/player/${token}/manifest`);
     expect(manifestResponse.status).toBe(200);
     const manifest = (await manifestResponse.json()) as {
@@ -859,10 +861,11 @@ describe("first-run organization setup", () => {
       ),
     ]).toEqual([readyPlaylistId]);
     const organization = await connection.db.query.organizations.findFirst();
+    if (!organization) throw new Error("Organization was not created");
     await connection.db
       .update(organizations)
       .set({ timezone: "America/New_York" })
-      .where(eq(organizations.id, organization!.id));
+      .where(eq(organizations.id, organization.id));
     const changed = await app.request(
       `/admin/displays/${displayId}/preview?atLocal=2026-09-08T00:30`,
       { headers },

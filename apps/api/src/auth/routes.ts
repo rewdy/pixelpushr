@@ -2,12 +2,13 @@ import { and, eq, gt, sql } from "drizzle-orm";
 import type { Hono } from "hono";
 import { z } from "zod";
 import type { Database } from "../db/client";
+import { firstRow } from "../db/rows";
 import { invitations, memberships, organizations, users } from "../db/schema";
 import { ApiError } from "../http/errors";
 import { parseJsonBody } from "../http/validation";
-import type { AuthProvider, Identity } from "./provider";
-import type { InvitationMailer } from "./mailer";
 import type { MediaStorage } from "../media/storage";
+import type { InvitationMailer } from "./mailer";
+import type { AuthProvider, Identity } from "./provider";
 
 export type AppDependencies = {
   db: Database["db"];
@@ -148,16 +149,14 @@ export const registerAuthRoutes = (
       });
       if (!user)
         throw new ApiError(401, "unauthorized", "Registered account required");
-      const organization = (
-        await transaction.insert(organizations).values(body).returning()
-      )[0]!;
-      await transaction
-        .insert(memberships)
-        .values({
-          organizationId: organization.id,
-          userId: user.id,
-          role: "owner",
-        });
+      const organization = firstRow(
+        await transaction.insert(organizations).values(body).returning(),
+      );
+      await transaction.insert(memberships).values({
+        organizationId: organization.id,
+        userId: user.id,
+        role: "owner",
+      });
       return organization;
     });
     return context.json({ organization: created }, 201);
@@ -230,7 +229,7 @@ export const registerAuthRoutes = (
           where: eq(memberships.userId, user.id),
         })
       : undefined;
-    if (!membership || membership.role !== "owner")
+    if (membership?.role !== "owner")
       throw new ApiError(403, "forbidden", "Owner access required");
     const body = await parseJsonBody(context, setupSchema);
     try {
@@ -243,13 +242,13 @@ export const registerAuthRoutes = (
         },
       ]);
     }
-    const organization = (
+    const organization = firstRow(
       await db
         .update(organizations)
         .set(body)
         .where(eq(organizations.id, membership.organizationId))
-        .returning()
-    )[0]!;
+        .returning(),
+    );
     return context.json({ organization });
   });
 
@@ -266,7 +265,7 @@ export const registerAuthRoutes = (
           where: eq(memberships.userId, user.id),
         })
       : undefined;
-    if (!membership || membership.role !== "owner")
+    if (membership?.role !== "owner")
       throw new ApiError(403, "forbidden", "Owner access required");
     const records = await db.query.invitations.findMany({
       where: eq(invitations.organizationId, membership.organizationId),
@@ -295,7 +294,7 @@ export const registerAuthRoutes = (
           where: eq(memberships.userId, user.id),
         })
       : undefined;
-    if (!membership || membership.role !== "owner")
+    if (membership?.role !== "owner")
       throw new ApiError(403, "forbidden", "Owner access required");
     const { email } = await parseJsonBody(context, inviteSchema);
     const existingUser = await db.query.users.findFirst({
@@ -332,7 +331,7 @@ export const registerAuthRoutes = (
     const token = Buffer.from(
       crypto.getRandomValues(new Uint8Array(32)),
     ).toString("base64url");
-    const record = (
+    const record = firstRow(
       await db
         .insert(invitations)
         .values({
@@ -341,8 +340,8 @@ export const registerAuthRoutes = (
           tokenHash: await hashToken(token),
           expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
         })
-        .returning()
-    )[0]!;
+        .returning(),
+    );
     const url = `${publicWebUrl.replace(/\/$/, "")}/invite/${token}`;
     try {
       await mailer.send(email, url);
@@ -403,13 +402,11 @@ export const registerAuthRoutes = (
         ),
       });
       if (existing) return "already_member" as const;
-      await transaction
-        .insert(memberships)
-        .values({
-          organizationId: invitation.organizationId,
-          userId: user.id,
-          role: "admin",
-        });
+      await transaction.insert(memberships).values({
+        organizationId: invitation.organizationId,
+        userId: user.id,
+        role: "admin",
+      });
       await transaction
         .update(invitations)
         .set({ status: "accepted", acceptedAt: new Date() })

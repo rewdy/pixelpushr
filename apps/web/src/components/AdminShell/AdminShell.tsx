@@ -13,6 +13,7 @@ import {
   UnstyledButton,
 } from "@mantine/core";
 import { useDisclosure } from "@mantine/hooks";
+import type { ReactNode } from "react";
 import { IoPlay } from "react-icons/io5";
 import {
   LuCalendarDays,
@@ -25,7 +26,6 @@ import {
   LuUsers,
   LuZap,
 } from "react-icons/lu";
-import type { ReactNode } from "react";
 import { Link, useLocation } from "wouter";
 import { setToken } from "../../helpers/api";
 import classes from "./AdminShell.module.css";

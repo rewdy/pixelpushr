@@ -1,15 +1,16 @@
 import { createHash } from "node:crypto";
-import { and, asc, eq } from "drizzle-orm";
-import type { Hono } from "hono";
-import { z } from "zod";
 import type {
   ManifestItem,
   OverrideWindow,
   PlayerManifest,
 } from "@pixelpushr/contracts/manifest";
+import { and, asc, eq } from "drizzle-orm";
+import type { Hono } from "hono";
+import { z } from "zod";
 import { getAdmin } from "../auth/guard";
 import type { AuthProvider } from "../auth/provider";
 import type { Database } from "../db/client";
+import { firstRow } from "../db/rows";
 import {
   assignments,
   displays,
@@ -216,7 +217,7 @@ export const registerDisplayRoutes = (
       playerTokenHash: _playerTokenHash,
       playerToken: _playerToken,
       ...display
-    } = (
+    } = firstRow(
       await db
         .insert(displays)
         .values({
@@ -225,8 +226,8 @@ export const registerDisplayRoutes = (
           playerToken: token,
           playerTokenHash: hashToken(token),
         })
-        .returning()
-    )[0]!;
+        .returning(),
+    );
     return context.json(
       { display: { ...display, playerUrl: playerUrl(publicWebUrl, token) } },
       201,
@@ -336,7 +337,7 @@ export const registerDisplayRoutes = (
         "Weekly window cannot exceed its repeat interval",
       );
     const result = await db.transaction(async (transaction) => {
-      const rule = (
+      const rule = firstRow(
         await transaction
           .insert(scheduleRules)
           .values({
@@ -348,9 +349,9 @@ export const registerDisplayRoutes = (
             weekInterval:
               body.recurrence === "weekly" ? (body.weekInterval ?? 1) : null,
           })
-          .returning()
-      )[0]!;
-      const assignment = (
+          .returning(),
+      );
+      const assignment = firstRow(
         await transaction
           .insert(assignments)
           .values({
@@ -360,8 +361,8 @@ export const registerDisplayRoutes = (
             mode: "scheduled",
             position: body.position,
           })
-          .returning()
-      )[0]!;
+          .returning(),
+      );
       return { ...assignment, schedule: rule, playlistName: playlist.name };
     });
     return context.json({ assignment: result }, 201);
@@ -438,7 +439,7 @@ export const registerDisplayRoutes = (
     try {
       startAt = body.activateNow
         ? new Date()
-        : localTimeToInstant(body.startLocal!, organization.timezone);
+        : localTimeToInstant(body.startLocal ?? "", organization.timezone);
       endAt = localTimeToInstant(body.endLocal, organization.timezone);
     } catch {
       throw new ApiError(400, "invalid_request", "Invalid local override time");
@@ -450,7 +451,7 @@ export const registerDisplayRoutes = (
         "Override expiration must be after its start",
       );
     const result = await db.transaction(async (transaction) => {
-      const rule = (
+      const rule = firstRow(
         await transaction
           .insert(scheduleRules)
           .values({
@@ -460,9 +461,9 @@ export const registerDisplayRoutes = (
             endAt,
             timezone: organization.timezone,
           })
-          .returning()
-      )[0]!;
-      const assignment = (
+          .returning(),
+      );
+      const assignment = firstRow(
         await transaction
           .insert(assignments)
           .values({
@@ -472,8 +473,8 @@ export const registerDisplayRoutes = (
             mode: "override",
             priority: body.priority,
           })
-          .returning()
-      )[0]!;
+          .returning(),
+      );
       return { ...assignment, schedule: rule, playlistName: playlist.name };
     });
     return context.json({ assignment: result }, 201);
@@ -572,16 +573,14 @@ export const registerDisplayRoutes = (
           ),
         );
       if (body.playlistIds.length)
-        await transaction
-          .insert(assignments)
-          .values(
-            body.playlistIds.map((playlistId, position) => ({
-              displayId: display.id,
-              playlistId,
-              mode: "always" as const,
-              position,
-            })),
-          );
+        await transaction.insert(assignments).values(
+          body.playlistIds.map((playlistId, position) => ({
+            displayId: display.id,
+            playlistId,
+            mode: "always" as const,
+            position,
+          })),
+        );
     });
     return context.json({ updated: true });
   });

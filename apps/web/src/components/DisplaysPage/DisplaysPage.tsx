@@ -24,8 +24,8 @@ import {
 import { Link, useParams } from "wouter";
 import { requestJson } from "../../helpers/api";
 import type { Playlist } from "../../models/media.models";
-import { ScheduledAssignments, type Assignment } from "./ScheduledAssignments";
 import { OverrideAssignments } from "./OverrideAssignments";
+import { type Assignment, ScheduledAssignments } from "./ScheduledAssignments";
 
 type Display = {
   id: string;
@@ -225,7 +225,10 @@ export const DisplayEditorPage = () => {
       const copy = [...previous];
       const target = position + offset;
       if (target < 0 || target >= copy.length) return previous;
-      [copy[position], copy[target]] = [copy[target]!, copy[position]!];
+      const currentId = copy[position];
+      const targetId = copy[target];
+      if (currentId === undefined || targetId === undefined) return previous;
+      [copy[position], copy[target]] = [targetId, currentId];
       return copy;
     });
   return (

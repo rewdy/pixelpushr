@@ -4,6 +4,7 @@ import { z } from "zod";
 import { getAdmin } from "../auth/guard";
 import type { AuthProvider } from "../auth/provider";
 import type { Database } from "../db/client";
+import { firstRow } from "../db/rows";
 import { mediaAssets } from "../db/schema";
 import { ApiError } from "../http/errors";
 import { parseJsonBody } from "../http/validation";
@@ -120,7 +121,7 @@ export const registerMediaRoutes = (
       : body.sizeBytes > limit
         ? `File exceeds the ${Math.round(limit / 1024 / 1024)} MB limit`
         : null;
-    const asset = (
+    const asset = firstRow(
       await db
         .insert(mediaAssets)
         .values({
@@ -134,8 +135,8 @@ export const registerMediaRoutes = (
           objectKey,
           failureReason,
         })
-        .returning()
-    )[0]!;
+        .returning(),
+    );
     if (failureReason)
       return context.json(
         { asset: serializeAsset(asset, storage), uploadUrl: null },
@@ -192,7 +193,7 @@ export const registerMediaRoutes = (
       if (!matchesSignature(asset.mimeType, bytes))
         failureReason = "File signature does not match its content type";
     }
-    const updated = (
+    const updated = firstRow(
       await db
         .update(mediaAssets)
         .set({
@@ -204,8 +205,8 @@ export const registerMediaRoutes = (
           updatedAt: new Date(),
         })
         .where(eq(mediaAssets.id, asset.id))
-        .returning()
-    )[0]!;
+        .returning(),
+    );
     return context.json({ asset: serializeAsset(updated, storage) });
   });
 

@@ -2,18 +2,18 @@ import type { PlayerManifest } from "@pixelpushr/contracts/manifest";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useParams } from "wouter";
 import {
-  advanceQueue,
-  applyTimedOverride,
-  initialQueue,
-  receiveManifest,
-  type QueueState,
-} from "../../helpers/playerQueue";
-import {
   cacheManifest,
   offlineMediaUrl,
   readCachedManifest,
   readClockOffset,
 } from "../../helpers/playerCache";
+import {
+  advanceQueue,
+  applyTimedOverride,
+  initialQueue,
+  type QueueState,
+  receiveManifest,
+} from "../../helpers/playerQueue";
 import classes from "./PlayerPage.module.css";
 
 const pollMs = Math.max(
@@ -37,6 +37,11 @@ export const PlayerPage = () => {
   const clockOffsetMs = useRef(0);
   const item = state?.queue[state.index];
   const itemKey = item ? `${item.id}:${state?.cycle}` : null;
+  const itemUrl = item?.url;
+  const itemKind = item?.kind;
+  const imageDurationMs = item?.imageDurationMs;
+  const videoMode = item?.videoMode;
+  const repeatDurationMs = item?.repeatDurationMs;
 
   const updateState = useCallback(
     (update: (current: QueueState | null) => QueueState | null) => {
@@ -54,6 +59,7 @@ export const PlayerPage = () => {
   );
 
   useEffect(() => {
+    if (itemKey === null) return;
     videoAdvanced.current = false;
     return () => {
       if (videoFallbackTimer.current !== null)
@@ -135,7 +141,7 @@ export const PlayerPage = () => {
       delay,
     );
     return () => window.clearTimeout(timer);
-  }, [state?.manifest, state?.overrideId, updateState]);
+  }, [state, updateState]);
 
   useEffect(() => {
     const report = () => {
@@ -163,45 +169,45 @@ export const PlayerPage = () => {
   }, []);
 
   useEffect(() => {
-    if (!item) {
+    if (!itemKey || !itemUrl) {
       setMediaUrl(null);
       return;
     }
     if (!offline) {
-      setMediaUrl(item.url);
+      setMediaUrl(itemUrl);
       return;
     }
     let active = true;
     let objectUrl: string | null = null;
-    void offlineMediaUrl(item.url).then((url) => {
+    void offlineMediaUrl(itemUrl).then((url) => {
       if (active) {
         objectUrl = url;
-        setMediaUrl(url ?? item.url);
+        setMediaUrl(url ?? itemUrl);
       } else if (url) URL.revokeObjectURL(url);
     });
     return () => {
       active = false;
       if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
-  }, [itemKey, item?.url, offline]);
+  }, [itemKey, itemUrl, offline]);
 
   useEffect(() => {
-    if (!item) return;
+    if (!itemKey) return;
     const duration =
-      item.kind === "image"
-        ? item.imageDurationMs
-        : item.videoMode === "repeat"
-          ? item.repeatDurationMs
+      itemKind === "image"
+        ? imageDurationMs
+        : videoMode === "repeat"
+          ? repeatDurationMs
           : null;
     if (!duration) return;
     const timer = window.setTimeout(advance, duration);
     return () => window.clearTimeout(timer);
   }, [
     itemKey,
-    item?.kind,
-    item?.imageDurationMs,
-    item?.videoMode,
-    item?.repeatDurationMs,
+    itemKind,
+    imageDurationMs,
+    videoMode,
+    repeatDurationMs,
     advance,
   ]);
 

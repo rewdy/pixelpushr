@@ -4,6 +4,7 @@ import { z } from "zod";
 import { getAdmin } from "../auth/guard";
 import type { AuthProvider } from "../auth/provider";
 import type { Database } from "../db/client";
+import { firstRow } from "../db/rows";
 import {
   assignments,
   mediaAssets,
@@ -75,12 +76,12 @@ export const registerPlaylistRoutes = (
   app.post("/admin/playlists", async (context) => {
     const { membership } = await getAdmin(context, db, auth);
     const body = await parseJsonBody(context, playlistSchema);
-    const playlist = (
+    const playlist = firstRow(
       await db
         .insert(playlists)
         .values({ organizationId: membership.organizationId, ...body })
-        .returning()
-    )[0]!;
+        .returning(),
+    );
     return context.json({ playlist }, 201);
   });
 
@@ -163,7 +164,7 @@ export const registerPlaylistRoutes = (
     );
     body.items.forEach((item, position) => {
       const asset = assets[position];
-      if (!asset || asset.status !== "ready")
+      if (asset?.status !== "ready")
         throw new ApiError(
           400,
           "invalid_request",

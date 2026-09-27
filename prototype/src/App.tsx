@@ -11,7 +11,6 @@ import {
   Divider,
   Drawer,
   Group,
-  Kbd,
   Menu,
   Paper,
   Progress,
@@ -23,12 +22,11 @@ import {
   TextInput,
   ThemeIcon,
   Title,
-  Tooltip,
   UnstyledButton,
-  useComputedColorScheme,
-  useMantineColorScheme,
-  useMatches,
 } from "@mantine/core";
+import { type ReactNode, useState } from "react";
+import type { IconType } from "react-icons";
+import { IoPlay } from "react-icons/io5";
 import {
   LuCalendarDays,
   LuChevronDown,
@@ -52,9 +50,6 @@ import {
   LuUsers,
   LuZap,
 } from "react-icons/lu";
-import { IoPlay } from "react-icons/io5";
-import type { IconType } from "react-icons";
-import { useState, type ReactNode } from "react";
 import { Link, Route, Switch, useLocation } from "wouter";
 import { mediaAssets, navSections, playlists } from "./data/prototype.data";
 

@@ -1,5 +1,6 @@
 import { and, asc, eq } from "drizzle-orm";
 import type { Database } from "./client";
+import { firstRow } from "./rows";
 import {
   assignments,
   displays,
@@ -20,7 +21,7 @@ export const createRepositories = (db: Session) => ({
   organizations: {
     first: async () => db.query.organizations.findFirst(),
     create: async (values: typeof organizations.$inferInsert) =>
-      (await db.insert(organizations).values(values).returning())[0]!,
+      firstRow(await db.insert(organizations).values(values).returning()),
     update: async (
       id: string,
       values: Partial<typeof organizations.$inferInsert>,
@@ -39,7 +40,7 @@ export const createRepositories = (db: Session) => ({
     byEmail: async (email: string) =>
       db.query.users.findFirst({ where: eq(users.email, email) }),
     create: async (values: typeof users.$inferInsert) =>
-      (await db.insert(users).values(values).returning())[0]!,
+      firstRow(await db.insert(users).values(values).returning()),
   },
   memberships: {
     byUser: async (userId: string) =>
@@ -50,7 +51,7 @@ export const createRepositories = (db: Session) => ({
         .from(memberships)
         .where(eq(memberships.organizationId, organizationId)),
     create: async (values: typeof memberships.$inferInsert) =>
-      (await db.insert(memberships).values(values).returning())[0]!,
+      firstRow(await db.insert(memberships).values(values).returning()),
   },
   invitations: {
     list: async (organizationId: string) =>
@@ -63,7 +64,7 @@ export const createRepositories = (db: Session) => ({
         where: eq(invitations.tokenHash, tokenHash),
       }),
     create: async (values: typeof invitations.$inferInsert) =>
-      (await db.insert(invitations).values(values).returning())[0]!,
+      firstRow(await db.insert(invitations).values(values).returning()),
     accept: async (id: string, at: Date) =>
       (
         await db
@@ -95,7 +96,7 @@ export const createRepositories = (db: Session) => ({
         ),
       }),
     create: async (values: typeof mediaAssets.$inferInsert) =>
-      (await db.insert(mediaAssets).values(values).returning())[0]!,
+      firstRow(await db.insert(mediaAssets).values(values).returning()),
     update: async (
       organizationId: string,
       id: string,
@@ -137,7 +138,7 @@ export const createRepositories = (db: Session) => ({
         ),
       }),
     create: async (values: typeof playlists.$inferInsert) =>
-      (await db.insert(playlists).values(values).returning())[0]!,
+      firstRow(await db.insert(playlists).values(values).returning()),
     update: async (
       organizationId: string,
       id: string,
@@ -171,7 +172,7 @@ export const createRepositories = (db: Session) => ({
         .where(eq(playlistItems.playlistId, playlistId))
         .orderBy(asc(playlistItems.position)),
     addItem: async (values: typeof playlistItems.$inferInsert) =>
-      (await db.insert(playlistItems).values(values).returning())[0]!,
+      firstRow(await db.insert(playlistItems).values(values).returning()),
     removeItems: async (playlistId: string) =>
       db.delete(playlistItems).where(eq(playlistItems.playlistId, playlistId)),
   },
@@ -193,7 +194,7 @@ export const createRepositories = (db: Session) => ({
         where: eq(displays.playerTokenHash, playerTokenHash),
       }),
     create: async (values: typeof displays.$inferInsert) =>
-      (await db.insert(displays).values(values).returning())[0]!,
+      firstRow(await db.insert(displays).values(values).returning()),
     heartbeat: async (id: string, health: string) =>
       db
         .update(displays)
@@ -208,7 +209,7 @@ export const createRepositories = (db: Session) => ({
   },
   schedules: {
     create: async (values: typeof scheduleRules.$inferInsert) =>
-      (await db.insert(scheduleRules).values(values).returning())[0]!,
+      firstRow(await db.insert(scheduleRules).values(values).returning()),
     byId: async (organizationId: string, id: string) =>
       db.query.scheduleRules.findFirst({
         where: and(
@@ -234,7 +235,7 @@ export const createRepositories = (db: Session) => ({
           asc(assignments.id),
         ),
     create: async (values: typeof assignments.$inferInsert) =>
-      (await db.insert(assignments).values(values).returning())[0]!,
+      firstRow(await db.insert(assignments).values(values).returning()),
     remove: async (displayId: string, id: string) =>
       db
         .delete(assignments)

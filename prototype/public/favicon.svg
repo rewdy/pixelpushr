@@ -1,4 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <title>Pixelpushr</title>
   <rect width="32" height="32" rx="8" fill="#506DFF"/>
   <path d="M16 6c2.4 4.3 6.3 6.7 6.3 11.2A6.3 6.3 0 1 1 9.7 17.2C9.7 14 12 11.2 16 6Z" fill="#fff"/>
   <path d="M16 13.1c.8 1.7 2.2 2.8 2.2 4.7a2.2 2.2 0 1 1-4.4 0c0-1.2.8-2.3 2.2-4.7Z" fill="#506DFF"/>

@@ -292,9 +292,9 @@ test("upload media and publish an ordered playlist through the real API", async 
   const playerUrl = await page
     .getByRole("link", { name: "Open player" })
     .getAttribute("href");
-  expect(playerUrl).toBeTruthy();
+  if (!playerUrl) throw new Error("Player link has no URL");
   const player = await page.context().newPage();
-  await player.goto(playerUrl!);
+  await player.goto(playerUrl);
   await expect(player.locator("img")).toBeVisible();
   expect(
     await player

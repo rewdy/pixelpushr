@@ -1,13 +1,12 @@
-import { Hono } from "hono";
-import { sql } from "drizzle-orm";
 import type { HealthResponse } from "@pixelpushr/contracts/health";
-import { handleError } from "./http/errors";
-import { registerAuthRoutes, type AppDependencies } from "./auth/routes";
-import { registerMediaRoutes } from "./media/routes";
-import type { LocalMediaStorage } from "./media/localStorage";
-import { ApiError } from "./http/errors";
-import { registerPlaylistRoutes } from "./playlists/routes";
+import { sql } from "drizzle-orm";
+import { Hono } from "hono";
+import { type AppDependencies, registerAuthRoutes } from "./auth/routes";
 import { registerDisplayRoutes } from "./displays/routes";
+import { ApiError, handleError } from "./http/errors";
+import type { LocalMediaStorage } from "./media/localStorage";
+import { registerMediaRoutes } from "./media/routes";
+import { registerPlaylistRoutes } from "./playlists/routes";
 
 /** Creates the HTTP application for local and Lambda runtimes. */
 export const createApp = (dependencies?: AppDependencies) => {
