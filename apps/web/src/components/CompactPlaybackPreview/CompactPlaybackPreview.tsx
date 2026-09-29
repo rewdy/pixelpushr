@@ -155,20 +155,25 @@ export const CompactPlaybackPreview = ({
       </AspectRatio>
       <Group gap="sm" wrap="nowrap">
         <RingProgress
-          size={50}
-          thickness={5}
+          size={16}
+          thickness={2}
           roundCaps
+          data-testid="compact-preview-progress"
+          role="progressbar"
+          aria-label={
+            progress === null
+              ? "Playback progress unavailable"
+              : "Playback progress"
+          }
+          aria-valuemin={progress === null ? undefined : 0}
+          aria-valuemax={progress === null ? undefined : 100}
+          aria-valuenow={progress === null ? undefined : Math.round(progress)}
           sections={[
             {
               value: progress ?? 100,
               color: progress === null ? "gray" : "brand",
             },
           ]}
-          label={
-            <Text size="xs" ta="center">
-              {progress === null ? "…" : `${Math.round(progress)}%`}
-            </Text>
-          }
         />
         <Stack gap={0} style={{ minWidth: 0 }}>
           <Text size="sm" fw={600} truncate>

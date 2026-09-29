@@ -2,6 +2,7 @@ import {
   ActionIcon,
   Alert,
   Badge,
+  Box,
   Button,
   Checkbox,
   Divider,
@@ -21,8 +22,14 @@ import {
 import { useMediaQuery } from "@mantine/hooks";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { LuArrowDown, LuArrowUp, LuPlus, LuTrash2 } from "react-icons/lu";
-import { useParams } from "wouter";
+import {
+  LuArrowDown,
+  LuArrowLeft,
+  LuArrowUp,
+  LuPlus,
+  LuTrash2,
+} from "react-icons/lu";
+import { Link, useParams } from "wouter";
 import { requestJson } from "../../helpers/api";
 import { filterMediaAssets } from "../../helpers/mediaFilters";
 import {
@@ -43,6 +50,8 @@ import {
   type PreviewItem,
 } from "../CompactPlaybackPreview/CompactPlaybackPreview";
 import { MediaThumbnail } from "../MediaThumbnail/MediaThumbnail";
+import { PageTitle } from "../PageTitle";
+import classes from "./PlaylistEditorPage.module.css";
 
 type MediaPickerProps = {
   assets: MediaAsset[];
@@ -59,7 +68,7 @@ const MediaPicker = ({ assets, onAdd }: MediaPickerProps) => {
   ].sort((a, b) => a.name.localeCompare(b.name));
   const filtered = filterMediaAssets(assets, filter, tagIds);
   return (
-    <Stack gap="md">
+    <Stack gap="md" w="100%" style={{ minWidth: 0 }} data-testid="media-picker">
       <TextInput
         label="Search ready media"
         placeholder="Search images and videos"
@@ -74,14 +83,30 @@ const MediaPicker = ({ assets, onAdd }: MediaPickerProps) => {
         onChange={setTagIds}
         clearable
       />
-      <ScrollArea.Autosize mah="65vh" type="auto">
-        <Stack gap="sm" pr="xs">
+      <ScrollArea.Autosize
+        mah="65vh"
+        type="auto"
+        w="100%"
+        styles={{ viewport: { maxWidth: "100%" } }}
+        className={classes.mediaPickerScroll}
+        data-testid="media-picker-scroll"
+      >
+        <Stack gap="sm" pr="xs" style={{ minWidth: 0 }}>
           {filtered.map((asset) => (
-            <Paper withBorder p="sm" key={asset.id}>
-              <Group wrap="nowrap" align="center" gap="sm">
-                <MediaThumbnail asset={asset} width={80} height={60} />
+            <Paper
+              withBorder
+              p="sm"
+              key={asset.id}
+              w="100%"
+              style={{ minWidth: 0 }}
+              data-testid="media-picker-row"
+            >
+              <Group wrap="nowrap" align="center" gap="sm" w="100%">
+                <Box style={{ flexShrink: 0 }}>
+                  <MediaThumbnail asset={asset} width={80} height={60} />
+                </Box>
                 <Stack gap={0} style={{ minWidth: 0, flex: 1 }}>
-                  <Text size="sm" fw={600} truncate>
+                  <Text size="sm" fw={600} truncate title={asset.name}>
                     {asset.name}
                   </Text>
                   <Text size="xs" c="dimmed" tt="capitalize">
@@ -92,6 +117,7 @@ const MediaPicker = ({ assets, onAdd }: MediaPickerProps) => {
                   variant="light"
                   aria-label={`Add ${asset.name}`}
                   onClick={() => onAdd(asset)}
+                  style={{ flexShrink: 0 }}
                 >
                   <LuPlus size={16} />
                 </ActionIcon>
@@ -255,7 +281,18 @@ export const PlaylistEditorPage = () => {
 
   return (
     <Stack gap="xl">
+      <PageTitle name={playlist.data?.playlist.name ?? "Playlist editor"} />
       <Stack gap={4}>
+        <Button
+          component={Link}
+          href="/playlists"
+          variant="subtle"
+          size="sm"
+          leftSection={<LuArrowLeft size={16} />}
+          w="fit-content"
+        >
+          Back to Playlists
+        </Button>
         <Text size="xs" c="dimmed" tt="uppercase" ff="monospace">
           Content / Playlists
         </Text>

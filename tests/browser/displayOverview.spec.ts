@@ -109,6 +109,13 @@ test("Overview distinguishes simulations from device health and follows override
   const lobby = page.getByTestId("display-card-populated");
   await expect(lobby.getByText("Simulated preview")).toBeVisible();
   await expect(lobby.getByTestId("compact-preview")).toBeVisible();
+  await expect(lobby.getByTestId("compact-preview-progress")).toHaveCSS(
+    "width",
+    "16px",
+  );
+  await expect(lobby.getByTestId("compact-preview-progress")).not.toContainText(
+    "%",
+  );
   await expect(lobby).toHaveAttribute("data-simulation-mode", "normal");
   await expect(
     page

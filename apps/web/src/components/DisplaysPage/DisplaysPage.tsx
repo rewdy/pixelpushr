@@ -16,6 +16,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import {
   LuArrowDown,
+  LuArrowLeft,
   LuArrowUp,
   LuExternalLink,
   LuPencil,
@@ -25,6 +26,7 @@ import {
 import { Link, useParams } from "wouter";
 import { requestJson } from "../../helpers/api";
 import type { Playlist } from "../../models/media.models";
+import { PageTitle } from "../PageTitle";
 import { AddPlaylistDrawer } from "./AddPlaylistDrawer";
 import {
   type Assignment,
@@ -281,7 +283,18 @@ export const DisplayEditorPage = () => {
     });
   return (
     <Stack gap="xl">
+      <PageTitle name={display?.name ?? "Display"} />
       <Stack gap={4}>
+        <Button
+          component={Link}
+          href="/displays"
+          variant="subtle"
+          size="sm"
+          leftSection={<LuArrowLeft size={16} />}
+          w="fit-content"
+        >
+          Back to Displays
+        </Button>
         <Text size="xs" c="dimmed" tt="uppercase" ff="monospace">
           Playback / Displays
         </Text>

@@ -934,7 +934,10 @@ test("draft preview loops images and videos without publishing", async ({
     "IMG",
   );
   await page.getByRole("textbox", { name: "Display seconds" }).fill("1");
-  await expect(page.getByText(/\d+%/)).toBeVisible();
+  const progress = page.getByTestId("compact-preview-progress");
+  await expect(progress).toHaveCSS("width", "16px");
+  await expect(progress).not.toContainText("%");
+  await expect(progress).toHaveAttribute("aria-valuenow", /\d+/);
   await expect(page.getByTestId("preview-media")).toHaveJSProperty(
     "tagName",
     "VIDEO",

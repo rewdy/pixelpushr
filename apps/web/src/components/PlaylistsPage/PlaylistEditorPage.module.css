@@ -1,0 +1,6 @@
+.mediaPickerScroll :global(.mantine-ScrollArea-viewport) > div {
+  /* biome-ignore lint/complexity/noImportantStyles: Radix sets display: table inline, which expands unbroken media names past the panel. */
+  display: block !important;
+  width: 100%;
+  min-width: 0;
+}
