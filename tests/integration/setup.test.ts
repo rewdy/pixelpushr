@@ -9,9 +9,11 @@ import { createApp } from "../../apps/api/src/app";
 import { createLocalAuth } from "../../apps/api/src/auth/localAuth";
 import { createDatabase } from "../../apps/api/src/db/client";
 import {
+  assignments,
   displays,
   invitations,
   organizations,
+  scheduleRules,
 } from "../../apps/api/src/db/schema";
 import { createLocalStorage } from "../../apps/api/src/media/localStorage";
 import { testDatabaseAdminUrl } from "../config";
@@ -1300,6 +1302,180 @@ describe("first-run organization setup", () => {
         )
       ).status,
     ).toBe(404);
+  });
+
+  test("partial edits retain immediate seconds and the later DST-overlap instant", async () => {
+    const login = await app.request("/auth/login", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        email: "owner@example.com",
+        password: "super-long-password",
+      }),
+    });
+    const token = ((await login.json()) as { accessToken: string }).accessToken;
+    const headers = {
+      "content-type": "application/json",
+      authorization: `Bearer ${token}`,
+    };
+    const displayResponse = await app.request("/admin/displays", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ name: "Partial edit fixture" }),
+    });
+    const display = (
+      (await displayResponse.json()) as {
+        display: { id: string; playerUrl: string };
+      }
+    ).display;
+    const displayId = display.id;
+    const create = (path: "schedules" | "overrides", body: object) =>
+      app.request(`/admin/displays/${displayId}/${path}`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ playlistId: readyPlaylistId, ...body }),
+      });
+    const immediate = await create("overrides", {
+      activateNow: true,
+      endLocal: "2099-01-01T00:00",
+      priority: 1,
+    });
+    expect(immediate.status).toBe(201);
+    const immediateId = (
+      (await immediate.json()) as { assignment: { id: string } }
+    ).assignment.id;
+    const append = await create("schedules", {
+      startLocal: "2026-11-01T01:30",
+      endLocal: "2026-11-01T02:00",
+      recurrence: "none",
+    });
+    expect(append.status).toBe(201);
+    const appendId = ((await append.json()) as { assignment: { id: string } })
+      .assignment.id;
+    const [appendRow] = await connection.db
+      .select()
+      .from(assignments)
+      .where(eq(assignments.id, appendId));
+    if (!appendRow?.scheduleRuleId) throw new Error("Append schedule missing");
+    await connection.db
+      .update(scheduleRules)
+      .set({
+        startAt: new Date("2026-11-01T06:30:00.000Z"),
+        endAt: new Date("2026-11-01T07:00:00.000Z"),
+        timezone: "America/New_York",
+      })
+      .where(eq(scheduleRules.id, appendRow.scheduleRuleId));
+    const listed = await app.request(
+      `/admin/displays/${displayId}/assignments`,
+      { headers },
+    );
+    type Listed = {
+      id: string;
+      version: string;
+      playlistId: string;
+      mode: string;
+      position: number;
+      schedule: {
+        id: string;
+        startAt: string;
+        endAt: string;
+        timezone: string;
+      };
+    };
+    const items = ((await listed.json()) as { assignments: Listed[] })
+      .assignments;
+    const originalImmediate = items.find((item) => item.id === immediateId);
+    const originalAppend = items.find((item) => item.id === appendId);
+    if (!originalImmediate || !originalAppend)
+      throw new Error("Edit fixture assignments missing");
+    const preview = async () => {
+      const response = await app.request(
+        `/admin/displays/${displayId}/preview?atLocal=2026-11-03T01:45`,
+        { headers },
+      );
+      expect(response.status).toBe(200);
+      return (await response.json()) as {
+        normalQueue: { playlistId: string }[];
+      };
+    };
+    expect((await preview()).normalQueue).toEqual([]);
+    const patch = (id: string, body: object) =>
+      app.request(`/admin/displays/${displayId}/assignments/${id}`, {
+        method: "PATCH",
+        headers,
+        body: JSON.stringify(body),
+      });
+    const priority = await patch(immediateId, {
+      expectedVersion: originalImmediate.version,
+      priority: 7,
+    });
+    expect(priority.status).toBe(200);
+    const prioritySaved = (await priority.json()) as {
+      assignment: Listed & { priority: number };
+    };
+    expect(prioritySaved.assignment.priority).toBe(7);
+    expect(prioritySaved.assignment.schedule.startAt).toBe(
+      originalImmediate.schedule.startAt,
+    );
+    expect(prioritySaved.assignment.schedule.endAt).toBe(
+      originalImmediate.schedule.endAt,
+    );
+    const manifestResponse = await app.request(
+      `${new URL(display.playerUrl).pathname}/manifest`,
+    );
+    expect(manifestResponse.status).toBe(200);
+    const manifest = (await manifestResponse.json()) as {
+      override: { priority: number; startAt: string; endAt: string } | null;
+    };
+    expect(manifest.override).toMatchObject({
+      priority: 7,
+      startAt: originalImmediate.schedule.startAt,
+      endAt: originalImmediate.schedule.endAt,
+    });
+    const recurrence = await patch(appendId, {
+      expectedVersion: originalAppend.version,
+      recurrence: "daily",
+      repeatInterval: 2,
+    });
+    expect(recurrence.status).toBe(200);
+    const recurrenceSaved = (await recurrence.json()) as {
+      assignment: Listed & { version: string };
+    };
+    expect(recurrenceSaved.assignment.schedule.startAt).toBe(
+      "2026-11-01T06:30:00.000Z",
+    );
+    expect(recurrenceSaved.assignment.schedule.endAt).toBe(
+      "2026-11-01T07:00:00.000Z",
+    );
+    expect(recurrenceSaved.assignment.schedule.timezone).toBe(
+      "America/New_York",
+    );
+    expect(recurrenceSaved.assignment.schedule.id).toBe(
+      originalAppend.schedule.id,
+    );
+    expect(recurrenceSaved.assignment).toMatchObject({
+      id: originalAppend.id,
+      playlistId: originalAppend.playlistId,
+      mode: originalAppend.mode,
+      position: originalAppend.position,
+    });
+    expect((await preview()).normalQueue).toContainEqual(
+      expect.objectContaining({ playlistId: readyPlaylistId }),
+    );
+    const boundary = await patch(appendId, {
+      expectedVersion: recurrenceSaved.assignment.version,
+      endLocal: "2026-11-01T02:15",
+    });
+    expect(boundary.status).toBe(200);
+    const boundarySaved = (await boundary.json()) as {
+      assignment: Listed;
+    };
+    expect(boundarySaved.assignment.schedule.startAt).toBe(
+      "2026-11-01T06:30:00.000Z",
+    );
+    expect(boundarySaved.assignment.schedule.endAt).toBe(
+      "2026-11-01T07:15:00.000Z",
+    );
   });
 
   test("recurring Overrides publish absolute lookahead windows with priority handoff", async () => {

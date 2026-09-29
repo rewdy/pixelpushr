@@ -11,33 +11,18 @@ import { useMutation } from "@tanstack/react-query";
 import { useState } from "react";
 import { requestJson } from "../../helpers/api";
 import type { Assignment } from "./assignment.models";
-import { LocalDateTimePicker } from "./LocalDateTimePicker";
 import {
-  type RecurrenceDraft,
-  RecurrenceFields,
-  recurrencePayload,
-} from "./RecurrenceFields";
+  assignmentEditPayload,
+  savedLocalDateTime,
+} from "./assignmentEditPayload";
+import { LocalDateTimePicker } from "./LocalDateTimePicker";
+import { type RecurrenceDraft, RecurrenceFields } from "./RecurrenceFields";
 
 type Props = {
   assignment: Assignment | null;
   displayId: string;
   onClose: () => void;
   onSaved: () => void;
-};
-
-const localDateTime = (instant: string, timezone: string) => {
-  const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone: timezone,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    hourCycle: "h23",
-  }).formatToParts(new Date(instant));
-  const get = (type: string) =>
-    parts.find((part) => part.type === type)?.value ?? "";
-  return `${get("year")}-${get("month")}-${get("day")}T${get("hour")}:${get("minute")}`;
 };
 
 const draftFromAssignment = (assignment: Assignment): RecurrenceDraft => {
@@ -84,10 +69,10 @@ const EditAssignmentForm = ({
   if (!schedule || !assignment.version)
     throw new Error("Scheduled assignment is required");
   const [startLocal, setStartLocal] = useState(() =>
-    localDateTime(schedule.startAt, schedule.timezone),
+    savedLocalDateTime(schedule.startAt, schedule.timezone),
   );
   const [endLocal, setEndLocal] = useState(() =>
-    localDateTime(schedule.endAt, schedule.timezone),
+    savedLocalDateTime(schedule.endAt, schedule.timezone),
   );
   const [recurrence, setRecurrence] = useState(() =>
     draftFromAssignment(assignment),
@@ -97,8 +82,8 @@ const EditAssignmentForm = ({
   );
   const [validationError, setValidationError] = useState<string | null>(null);
   const original = JSON.stringify([
-    localDateTime(schedule.startAt, schedule.timezone),
-    localDateTime(schedule.endAt, schedule.timezone),
+    savedLocalDateTime(schedule.startAt, schedule.timezone),
+    savedLocalDateTime(schedule.endAt, schedule.timezone),
     draftFromAssignment(assignment),
     assignment.priority,
   ]);
@@ -114,28 +99,18 @@ const EditAssignmentForm = ({
         Number(priority) > 1000
       )
         throw new Error("Priority must be between 0 and 1000.");
-      const repeat = recurrencePayload(recurrence, startLocal);
+      const body = assignmentEditPayload(
+        assignment,
+        startLocal,
+        endLocal,
+        recurrence,
+        Number(priority),
+      );
       return requestJson(
         `/admin/displays/${displayId}/assignments/${assignment.id}`,
         {
           method: "PATCH",
-          body: JSON.stringify({
-            expectedVersion: assignment.version,
-            startLocal,
-            endLocal,
-            recurrence: repeat.recurrence,
-            repeatInterval:
-              "repeatInterval" in repeat ? repeat.repeatInterval : null,
-            weekdays: "weekdays" in repeat ? repeat.weekdays : null,
-            monthDay: "monthDay" in repeat ? repeat.monthDay : null,
-            monthOrdinal: "monthOrdinal" in repeat ? repeat.monthOrdinal : null,
-            monthWeekday: "monthWeekday" in repeat ? repeat.monthWeekday : null,
-            lastOccurrenceDate:
-              "lastOccurrenceDate" in repeat ? repeat.lastOccurrenceDate : null,
-            ...(assignment.mode === "override"
-              ? { priority: Number(priority) }
-              : {}),
-          }),
+          body: JSON.stringify(body),
         },
       );
     },

@@ -631,10 +631,38 @@ test("recurring Override creation and settings edits use the shared schedule con
   await expect(
     edit.getByRole("button", { name: "Save settings" }),
   ).toBeDisabled();
+  let unchangedWrites = 0;
+  const countEditWrites = (request: import("@playwright/test").Request) => {
+    if (request.method() === "PATCH" && request.url().includes("/assignments/"))
+      unchangedWrites += 1;
+  };
+  page.on("request", countEditWrites);
+  await edit.getByRole("button", { name: "Cancel" }).click();
+  await expect(edit).toBeHidden();
+  expect(unchangedWrites).toBe(0);
+  page.off("request", countEditWrites);
+  await page
+    .getByRole("button", { name: "Edit Weekly campaign override settings" })
+    .click();
   await edit.getByRole("textbox", { name: "Repeat", exact: true }).click();
   await page.getByRole("option", { name: "Daily" }).click();
   await edit.getByRole("textbox", { name: "Repeat every (days)" }).fill("2");
+  const overrideRequest = page.waitForRequest(
+    (request) =>
+      request.method() === "PATCH" && request.url().includes("/assignments/"),
+  );
   await edit.getByRole("button", { name: "Save settings" }).click();
+  const overrideBody = (await overrideRequest).postDataJSON() as Record<
+    string,
+    unknown
+  >;
+  expect(overrideBody).toMatchObject({
+    recurrence: "daily",
+    repeatInterval: 2,
+    monthDay: null,
+  });
+  expect(overrideBody).not.toHaveProperty("startLocal");
+  expect(overrideBody).not.toHaveProperty("endLocal");
   await expect(edit).toBeHidden();
   await expect(
     page.getByText(/Every 2 days.*Last start 2026-12-31/),
@@ -702,6 +730,64 @@ test("recurring Override creation and settings edits use the shared schedule con
   await page.getByRole("option", { name: "Friday" }).click();
   await drawer.getByRole("button", { name: "Add playlist" }).click();
   await expect(page.getByText(/Every month on the last Fri/)).toBeVisible();
+  await page
+    .getByRole("button", { name: "Edit Brand loop scheduled settings" })
+    .click();
+  const appendEdit = page.getByRole("dialog", {
+    name: "Edit Brand loop settings",
+  });
+  await expect(appendEdit).toBeVisible();
+  await appendEdit
+    .getByRole("textbox", { name: "Repeat every (months)" })
+    .fill("2");
+  const appendRequest = page.waitForRequest(
+    (request) =>
+      request.method() === "PATCH" && request.url().includes("/assignments/"),
+  );
+  await appendEdit.getByRole("button", { name: "Save settings" }).click();
+  const appendBody = (await appendRequest).postDataJSON() as Record<
+    string,
+    unknown
+  >;
+  expect(appendBody).toMatchObject({ repeatInterval: 2 });
+  expect(appendBody).not.toHaveProperty("startLocal");
+  expect(appendBody).not.toHaveProperty("endLocal");
+  expect(appendBody).not.toHaveProperty("recurrence");
+  await expect(page.getByText(/Every 2 months on the last Fri/)).toBeVisible();
+  await page
+    .getByRole("button", { name: "Edit Weekly campaign override settings" })
+    .click();
+  await chooseDateTime(page, edit, "End", "2026-01-30T10:00");
+  await edit.getByRole("button", { name: "Save settings" }).click();
+  await expect(edit.getByText("End must be after start.")).toBeVisible();
+  await chooseDateTime(page, edit, "End", "2026-01-31T10:00");
+  await edit.getByRole("textbox", { name: "Priority" }).fill("6");
+  const priorityRequest = page.waitForRequest(
+    (request) =>
+      request.method() === "PATCH" && request.url().includes("/assignments/"),
+  );
+  await edit.getByRole("button", { name: "Save settings" }).click();
+  const priorityBody = (await priorityRequest).postDataJSON() as Record<
+    string,
+    unknown
+  >;
+  expect(priorityBody).toEqual({
+    expectedVersion: expect.any(String),
+    priority: 6,
+  });
+  await expect(edit).toBeHidden();
+  const refreshedSimulation = page.waitForResponse(
+    (response) =>
+      response.url().includes("/manifest") && response.status() === 200,
+  );
+  await page.getByRole("link", { name: "Overview" }).click();
+  const manifest = (await refreshedSimulation).json() as Promise<{
+    overrideWindows: { priority: number }[];
+  }>;
+  expect(
+    (await manifest).overrideWindows.some((window) => window.priority === 6),
+  ).toBe(true);
+  await expect(page.getByText("Simulated preview")).toBeVisible();
 });
 
 test("visual picker and bulk draft edits preserve duplicate items and save boundary", async ({

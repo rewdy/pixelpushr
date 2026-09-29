@@ -467,6 +467,9 @@ export const DisplayEditorPage = () => {
             void queryClient.invalidateQueries({
               queryKey: ["schedule-preview", id],
             });
+            void queryClient.invalidateQueries({
+              queryKey: ["display-simulation", id],
+            });
           }}
         />
       )}
