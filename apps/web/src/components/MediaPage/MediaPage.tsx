@@ -2,6 +2,8 @@ import {
   Alert,
   Badge,
   Button,
+  Checkbox,
+  Drawer,
   FileButton,
   Group,
   Modal,
@@ -14,7 +16,11 @@ import {
   TextInput,
   Title,
 } from "@mantine/core";
-import type { MediaDeleteImpact, MediaTag } from "@pixelpushr/contracts/media";
+import type {
+  BulkMediaDeleteImpact,
+  MediaDeleteImpact,
+  MediaTag,
+} from "@pixelpushr/contracts/media";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { LuUpload } from "react-icons/lu";
@@ -41,9 +47,10 @@ export const MediaPage = () => {
   const [draggingFiles, setDraggingFiles] = useState(false);
   const [search, setSearch] = useState("");
   const [tagIds, setTagIds] = useState<string[]>([]);
-  const [action, setAction] = useState<
-    "rename" | "replace" | "tags" | "delete" | null
-  >(null);
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [bulkAction, setBulkAction] = useState<"tags" | "delete" | null>(null);
+  const [bulkTagNames, setBulkTagNames] = useState<string[]>([]);
+  const [action, setAction] = useState<"edit" | "delete" | null>(null);
   const [target, setTarget] = useState<MediaAsset | null>(null);
   const [name, setName] = useState("");
   const [tagNames, setTagNames] = useState<string[]>([]);
@@ -57,11 +64,56 @@ export const MediaPage = () => {
       ),
     enabled: action === "delete" && !!target,
   });
+  const bulkImpact = useQuery({
+    queryKey: ["media-bulk-delete-impact", [...selectedIds].sort()],
+    queryFn: () =>
+      requestJson<BulkMediaDeleteImpact>("/admin/media/bulk/delete-impact", {
+        method: "POST",
+        body: JSON.stringify({ assetIds: selectedIds }),
+      }),
+    enabled: bulkAction === "delete" && selectedIds.length > 0,
+  });
   const visibleAssets = filterMediaAssets(
     assets.data?.assets ?? [],
     search,
     tagIds,
   );
+  useEffect(() => {
+    if (!assets.data) return;
+    const available = new Set(assets.data.assets.map((asset) => asset.id));
+    setSelectedIds((current) => current.filter((id) => available.has(id)));
+  }, [assets.data]);
+  const toggleSelected = (id: string) =>
+    setSelectedIds((current) =>
+      current.includes(id)
+        ? current.filter((item) => item !== id)
+        : [...current, id],
+    );
+  const selectAllVisible = () => {
+    const visible = visibleAssets.map((asset) => asset.id);
+    setSelectedIds((current) => [...new Set([...current, ...visible])]);
+  };
+  const runBulk = async (
+    work: () => Promise<unknown>,
+    onFailure?: () => Promise<unknown>,
+  ) => {
+    setBusy(true);
+    setActionError(null);
+    try {
+      await work();
+      await refresh();
+      setSelectedIds([]);
+      setBulkTagNames([]);
+      setBulkAction(null);
+    } catch (error) {
+      setActionError(
+        error instanceof Error ? error.message : "Bulk action failed",
+      );
+      if (onFailure) await onFailure();
+    } finally {
+      setBusy(false);
+    }
+  };
   const openAction = (next: typeof action, asset: MediaAsset) => {
     setTarget(asset);
     setAction(next);
@@ -84,13 +136,14 @@ export const MediaPage = () => {
   const runAction = async (
     work: () => Promise<unknown>,
     onFailure?: () => Promise<unknown>,
+    closeOnSuccess = true,
   ) => {
     setBusy(true);
     setActionError(null);
     try {
       await work();
       await refresh();
-      closeAction();
+      if (closeOnSuccess) closeAction();
     } catch (error) {
       setActionError(
         error instanceof Error ? error.message : "Media action failed",
@@ -201,7 +254,10 @@ export const MediaPage = () => {
           label="Search media"
           placeholder="Search by name"
           value={search}
-          onChange={(event) => setSearch(event.currentTarget.value)}
+          onChange={(event) => {
+            setSearch(event.currentTarget.value);
+            setSelectedIds([]);
+          }}
         />
         <MultiSelect
           label="Filter by tags"
@@ -211,15 +267,76 @@ export const MediaPage = () => {
             label: tag.name,
           }))}
           value={tagIds}
-          onChange={setTagIds}
+          onChange={(value) => {
+            setTagIds(value);
+            setSelectedIds([]);
+          }}
           clearable
         />
       </Group>
       <Paper withBorder p="lg">
+        <Group justify="space-between" mb="md" gap="sm">
+          <Group gap="sm">
+            <Button
+              size="xs"
+              variant="subtle"
+              disabled={
+                !visibleAssets.length ||
+                selectedIds.length +
+                  visibleAssets.filter(
+                    (asset) => !selectedIds.includes(asset.id),
+                  ).length >
+                  100
+              }
+              onClick={selectAllVisible}
+            >
+              Select all visible
+            </Button>
+            <Button
+              size="xs"
+              variant="subtle"
+              disabled={!selectedIds.length}
+              onClick={() => setSelectedIds([])}
+            >
+              Deselect all
+            </Button>
+            <Text size="sm">{selectedIds.length} selected</Text>
+          </Group>
+          <Group gap="xs">
+            <Button
+              size="xs"
+              disabled={!selectedIds.length}
+              onClick={() => {
+                setActionError(null);
+                setBulkAction("tags");
+              }}
+            >
+              Add tags
+            </Button>
+            <Button
+              size="xs"
+              color="red"
+              variant="light"
+              disabled={!selectedIds.length}
+              onClick={() => {
+                setActionError(null);
+                setBulkAction("delete");
+              }}
+            >
+              Delete selected
+            </Button>
+          </Group>
+        </Group>
+        {visibleAssets.length > 100 && (
+          <Text size="xs" c="dimmed">
+            Select up to 100 assets per bulk action.
+          </Text>
+        )}
         <Table.ScrollContainer minWidth={820}>
           <Table highlightOnHover>
             <Table.Thead>
               <Table.Tr>
+                <Table.Th>Select</Table.Th>
                 <Table.Th>Asset</Table.Th>
                 <Table.Th>Type</Table.Th>
                 <Table.Th>Size</Table.Th>
@@ -232,12 +349,28 @@ export const MediaPage = () => {
               {visibleAssets.map((asset) => (
                 <Table.Tr key={asset.id}>
                   <Table.Td>
+                    <Checkbox
+                      aria-label={`Select ${asset.name}`}
+                      checked={selectedIds.includes(asset.id)}
+                      disabled={
+                        !selectedIds.includes(asset.id) &&
+                        selectedIds.length >= 100
+                      }
+                      onChange={() => toggleSelected(asset.id)}
+                    />
+                  </Table.Td>
+                  <Table.Td>
                     <Group gap="md">
                       <MediaThumbnail asset={asset} width={48} height={36} />
                       <Stack gap={0}>
-                        <Text size="sm" fw={600}>
+                        <Button
+                          size="compact-sm"
+                          variant="transparent"
+                          p={0}
+                          onClick={() => openAction("edit", asset)}
+                        >
                           {asset.name}
-                        </Text>
+                        </Button>
                         {asset.failureReason && (
                           <Text size="xs" c="red">
                             {asset.failureReason}
@@ -287,24 +420,9 @@ export const MediaPage = () => {
                       <Button
                         size="xs"
                         variant="subtle"
-                        onClick={() => openAction("rename", asset)}
+                        onClick={() => openAction("edit", asset)}
                       >
-                        Rename
-                      </Button>
-                      <Button
-                        size="xs"
-                        variant="subtle"
-                        onClick={() => openAction("tags", asset)}
-                      >
-                        Tags
-                      </Button>
-                      <Button
-                        size="xs"
-                        variant="subtle"
-                        disabled={asset.status !== "ready"}
-                        onClick={() => openAction("replace", asset)}
-                      >
-                        Replace
+                        Edit
                       </Button>
                       <Button
                         size="xs"
@@ -330,13 +448,15 @@ export const MediaPage = () => {
         )}
         {assets.error && <Alert color="red">{assets.error.message}</Alert>}
       </Paper>
-      <Modal
-        opened={action !== null}
+      <Drawer
+        opened={action === "edit"}
         onClose={closeAction}
-        title={`${action === "rename" ? "Rename" : action === "replace" ? "Replace" : action === "tags" ? "Edit tags for" : "Delete"} ${target?.name ?? "media"}`}
+        title={`Edit ${target?.name ?? "media"}`}
+        position="right"
+        size="md"
       >
         <Stack>
-          {action === "rename" && target && (
+          {target && (
             <>
               <TextInput
                 label="Asset name"
@@ -347,11 +467,14 @@ export const MediaPage = () => {
                 loading={busy}
                 disabled={!name.trim()}
                 onClick={() =>
-                  void runAction(() =>
-                    requestJson(`/admin/media/${target.id}`, {
-                      method: "PATCH",
-                      body: JSON.stringify({ name }),
-                    }),
+                  void runAction(
+                    () =>
+                      requestJson(`/admin/media/${target.id}`, {
+                        method: "PATCH",
+                        body: JSON.stringify({ name }),
+                      }),
+                    undefined,
+                    false,
                   )
                 }
               >
@@ -359,10 +482,11 @@ export const MediaPage = () => {
               </Button>
             </>
           )}
-          {action === "tags" && target && (
+          {target && (
             <>
               <TagsInput
                 label="Tags"
+                comboboxProps={{ position: "top" }}
                 description="Reuse existing tags or type a new one"
                 data={(tags.data?.tags ?? []).map((tag) => tag.name)}
                 value={tagNames}
@@ -372,11 +496,14 @@ export const MediaPage = () => {
               <Button
                 loading={busy}
                 onClick={() =>
-                  void runAction(() =>
-                    requestJson(`/admin/media/${target.id}/tags`, {
-                      method: "PUT",
-                      body: JSON.stringify({ tags: tagNames }),
-                    }),
+                  void runAction(
+                    () =>
+                      requestJson(`/admin/media/${target.id}/tags`, {
+                        method: "PUT",
+                        body: JSON.stringify({ tags: tagNames }),
+                      }),
+                    undefined,
+                    false,
                   )
                 }
               >
@@ -384,7 +511,7 @@ export const MediaPage = () => {
               </Button>
             </>
           )}
-          {action === "replace" && target && (
+          {target && (
             <>
               <Text size="sm">
                 Choose a new {target.kind}. Its playlist uses and playback
@@ -402,8 +529,12 @@ export const MediaPage = () => {
                 }}
               >
                 {(props) => (
-                  <Button {...props} loading={busy}>
-                    Choose replacement
+                  <Button
+                    {...props}
+                    loading={busy}
+                    disabled={target.status !== "ready"}
+                  >
+                    Replace file
                   </Button>
                 )}
               </FileButton>
@@ -414,6 +545,15 @@ export const MediaPage = () => {
               )}
             </>
           )}
+          {actionError && <Alert color="red">{actionError}</Alert>}
+        </Stack>
+      </Drawer>
+      <Modal
+        opened={action === "delete"}
+        onClose={closeAction}
+        title={`Delete ${target?.name ?? "media"}`}
+      >
+        <Stack>
           {action === "delete" && target && (
             <>
               {deleteImpact.isLoading && (
@@ -460,6 +600,101 @@ export const MediaPage = () => {
                   </Button>
                 </>
               )}
+            </>
+          )}
+          {actionError && <Alert color="red">{actionError}</Alert>}
+        </Stack>
+      </Modal>
+      <Modal
+        opened={bulkAction === "tags"}
+        onClose={() => setBulkAction(null)}
+        title={`Add tags to ${selectedIds.length} assets`}
+      >
+        <Stack>
+          <TagsInput
+            label="Tags to add"
+            comboboxProps={{ position: "top" }}
+            description="Existing tags stay on each asset"
+            data={(tags.data?.tags ?? []).map((tag) => tag.name)}
+            value={bulkTagNames}
+            onChange={setBulkTagNames}
+            maxTags={20}
+          />
+          <Button
+            disabled={!bulkTagNames.length || !selectedIds.length}
+            loading={busy}
+            onClick={() =>
+              void runBulk(() =>
+                requestJson("/admin/media/bulk/tags", {
+                  method: "POST",
+                  body: JSON.stringify({
+                    assetIds: selectedIds,
+                    tags: bulkTagNames,
+                  }),
+                }),
+              )
+            }
+          >
+            Add tags
+          </Button>
+          {actionError && <Alert color="red">{actionError}</Alert>}
+        </Stack>
+      </Modal>
+      <Modal
+        opened={bulkAction === "delete"}
+        onClose={() => setBulkAction(null)}
+        title={`Delete ${selectedIds.length} selected assets`}
+      >
+        <Stack>
+          {bulkImpact.isLoading && (
+            <Text size="sm">Checking playlist uses…</Text>
+          )}
+          {bulkImpact.error && (
+            <Alert color="red">{bulkImpact.error.message}</Alert>
+          )}
+          {bulkImpact.data && (
+            <>
+              <Text size="sm">Selected assets:</Text>
+              {bulkImpact.data.assets.map((asset) => (
+                <Text size="sm" key={asset.id}>
+                  {asset.name}: {asset.itemCount} saved playlist item
+                  {asset.itemCount === 1 ? "" : "s"}
+                </Text>
+              ))}
+              <Text size="sm">
+                This will remove {bulkImpact.data.totalItems} item
+                {bulkImpact.data.totalItems === 1 ? "" : "s"} from existing
+                playlists:
+              </Text>
+              {bulkImpact.data.playlists.map((playlist) => (
+                <Text size="sm" key={playlist.id}>
+                  {playlist.name}: {playlist.itemIds.length} item
+                  {playlist.itemIds.length === 1 ? "" : "s"}
+                </Text>
+              ))}
+              <Text size="xs" c="dimmed">
+                This cannot be undone. Existing players may keep the old files
+                during a seven-day handoff.
+              </Text>
+              <Button
+                color="red"
+                loading={busy}
+                onClick={() =>
+                  void runBulk(
+                    () =>
+                      requestJson("/admin/media/bulk/delete", {
+                        method: "POST",
+                        body: JSON.stringify({
+                          assetIds: selectedIds,
+                          snapshotToken: bulkImpact.data.snapshotToken,
+                        }),
+                      }),
+                    () => bulkImpact.refetch(),
+                  )
+                }
+              >
+                Delete selected assets and playlist uses
+              </Button>
             </>
           )}
           {actionError && <Alert color="red">{actionError}</Alert>}

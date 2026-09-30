@@ -2,7 +2,10 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { MediaDeleteImpact } from "@pixelpushr/contracts/media";
+import type {
+  BulkMediaDeleteImpact,
+  MediaDeleteImpact,
+} from "@pixelpushr/contracts/media";
 import { eq } from "drizzle-orm";
 import { migrate } from "drizzle-orm/postgres-js/migrator";
 import postgres from "postgres";
@@ -744,6 +747,217 @@ describe("media management", () => {
       .where(eq(playlistItems.mediaAssetId, racingAssetId));
     if (current) expect(uses).toHaveLength(2);
     else expect(uses).toHaveLength(0);
+  });
+
+  test("bulk tags preserve distinct tags and reject invalid sets atomically", async () => {
+    const first = await uploadImage("Bulk tag first");
+    const second = await uploadImage("Bulk tag second");
+    const put = (id: string, tags: string[]) =>
+      app.request(`/admin/media/${id}/tags`, {
+        method: "PUT",
+        headers,
+        body: json({ tags }),
+      });
+    expect((await put(first, ["First"])).status).toBe(200);
+    expect((await put(second, ["Second"])).status).toBe(200);
+    const add = (assetIds: string[], tags: string[]) =>
+      app.request("/admin/media/bulk/tags", {
+        method: "POST",
+        headers,
+        body: json({ assetIds, tags }),
+      });
+    expect((await add([first, second], ["Shared", "shared"])).status).toBe(200);
+    const listed = async () =>
+      (
+        (await (await app.request("/admin/media", { headers })).json()) as {
+          assets: Array<{ id: string; tags: Array<{ name: string }> }>;
+        }
+      ).assets;
+    const current = await listed();
+    expect(
+      current
+        .find((asset) => asset.id === first)
+        ?.tags.map((tag) => tag.name.toLocaleLowerCase())
+        .sort(),
+    ).toEqual(["first", "shared"]);
+    expect(
+      current
+        .find((asset) => asset.id === second)
+        ?.tags.map((tag) => tag.name.toLocaleLowerCase())
+        .sort(),
+    ).toEqual(["second", "shared"]);
+    expect((await add([first, crypto.randomUUID()], ["No write"])).status).toBe(
+      404,
+    );
+    expect((await add([first, first], ["No write"])).status).toBe(400);
+    expect(
+      (
+        await add(
+          [first, second],
+          Array.from({ length: 19 }, (_, index) => `Limit ${index}`),
+        )
+      ).status,
+    ).toBe(400);
+    const after = await listed();
+    expect(after.find((asset) => asset.id === first)?.tags).toEqual(
+      current.find((asset) => asset.id === first)?.tags,
+    );
+    expect(after.find((asset) => asset.id === second)?.tags).toEqual(
+      current.find((asset) => asset.id === second)?.tags,
+    );
+    const [foreignOrganization] = await connection.db
+      .insert(organizations)
+      .values({ name: "Bulk foreign" })
+      .returning();
+    if (!foreignOrganization) throw new Error("Missing foreign organization");
+    const [foreign] = await connection.db
+      .insert(mediaAssets)
+      .values({
+        organizationId: foreignOrganization.id,
+        name: "Foreign bulk asset",
+        kind: "image",
+        status: "ready",
+        mimeType: "image/png",
+        objectKey: `${foreignOrganization.id}/${crypto.randomUUID()}`,
+        sizeBytes: png.length,
+      })
+      .returning();
+    if (!foreign) throw new Error("Missing foreign media");
+    expect((await add([first, foreign.id], ["Private"])).status).toBe(404);
+    expect(
+      (
+        await app.request("/admin/media/bulk/delete-impact", {
+          method: "POST",
+          headers,
+          body: json({ assetIds: [first, foreign.id] }),
+        })
+      ).status,
+    ).toBe(404);
+  });
+
+  test("bulk deletion reviews mixed uses and retires every published object atomically", async () => {
+    const used = await uploadImage("Bulk used");
+    const unused = await uploadImage("Bulk unused");
+    const keep = await uploadImage("Bulk keep");
+    const usedAsset = await connection.db.query.mediaAssets.findFirst({
+      where: eq(mediaAssets.id, used),
+    });
+    if (!usedAsset) throw new Error("Missing bulk used asset");
+    const thumbnailKey = `${usedAsset.organizationId}/${crypto.randomUUID()}`;
+    await storage.writeSmall(thumbnailKey, "image/jpeg", png);
+    await connection.db
+      .update(mediaAssets)
+      .set({ thumbnailKey })
+      .where(eq(mediaAssets.id, used));
+    const playlistId = await createPlaylist("Bulk playlist", [
+      { mediaAssetId: used, imageDurationMs: 3000 },
+      { mediaAssetId: keep, imageDurationMs: 4000 },
+      { mediaAssetId: used, imageDurationMs: 5000 },
+    ]);
+    const impact = async () => {
+      const response = await app.request("/admin/media/bulk/delete-impact", {
+        method: "POST",
+        headers,
+        body: json({ assetIds: [unused, used] }),
+      });
+      expect(response.status).toBe(200);
+      return response.json() as Promise<BulkMediaDeleteImpact>;
+    };
+    const reviewed = await impact();
+    expect(reviewed.totalItems).toBe(2);
+    expect(reviewed.assets.map((asset) => asset.itemCount).sort()).toEqual([
+      0, 2,
+    ]);
+    const remove = (assetIds: string[], snapshotToken: string) =>
+      app.request("/admin/media/bulk/delete", {
+        method: "POST",
+        headers,
+        body: json({ assetIds, snapshotToken }),
+      });
+    expect(
+      (await remove([used, crypto.randomUUID()], reviewed.snapshotToken))
+        .status,
+    ).toBe(409);
+    const foreign = await connection.db.query.mediaAssets.findFirst({
+      where: eq(mediaAssets.name, "Foreign bulk asset"),
+    });
+    if (!foreign) throw new Error("Missing foreign bulk asset");
+    expect(
+      (await remove([used, foreign.id], reviewed.snapshotToken)).status,
+    ).toBe(409);
+    expect((await remove([used, unused], "0".repeat(64))).status).toBe(409);
+    const beforeChange = await connection.db
+      .select()
+      .from(mediaAssets)
+      .where(eq(mediaAssets.id, used));
+    expect(beforeChange).toHaveLength(1);
+    const changed = await app.request(`/admin/playlists/${playlistId}/items`, {
+      method: "PUT",
+      headers,
+      body: json({
+        items: [
+          { mediaAssetId: used, imageDurationMs: 3000 },
+          { mediaAssetId: keep, imageDurationMs: 4000 },
+        ],
+      }),
+    });
+    expect(changed.status).toBe(200);
+    expect((await remove([used, unused], reviewed.snapshotToken)).status).toBe(
+      409,
+    );
+    expect(
+      await connection.db
+        .select()
+        .from(mediaAssets)
+        .where(eq(mediaAssets.id, unused)),
+    ).toHaveLength(1);
+    const fresh = await impact();
+    const keys = await connection.db
+      .select({ id: mediaAssets.id, objectKey: mediaAssets.objectKey })
+      .from(mediaAssets)
+      .where(eq(mediaAssets.id, used));
+    const unusedKey = (
+      await connection.db
+        .select({ objectKey: mediaAssets.objectKey })
+        .from(mediaAssets)
+        .where(eq(mediaAssets.id, unused))
+    )[0]?.objectKey;
+    expect((await remove([used, unused], fresh.snapshotToken)).status).toBe(
+      200,
+    );
+    expect(
+      await connection.db
+        .select()
+        .from(mediaAssets)
+        .where(eq(mediaAssets.id, used)),
+    ).toHaveLength(0);
+    expect(
+      await connection.db
+        .select()
+        .from(mediaAssets)
+        .where(eq(mediaAssets.id, unused)),
+    ).toHaveLength(0);
+    const remaining = await connection.db
+      .select()
+      .from(playlistItems)
+      .where(eq(playlistItems.playlistId, playlistId));
+    expect(remaining.map((item) => item.mediaAssetId)).toEqual([keep]);
+    expect(remaining[0]?.position).toBe(1);
+    const retired = await connection.db.select().from(retiredMediaObjects);
+    for (const key of [keys[0]?.objectKey, unusedKey, thumbnailKey]) {
+      expect(
+        retired.some(
+          (item) =>
+            item.objectKey === key &&
+            item.expiresAt.getTime() > Date.now() + 6 * 86400000,
+        ),
+      ).toBe(true);
+      if (!key) throw new Error("Missing retired media key");
+      const mediaUrl = new URL(storage.publicUrl(key));
+      expect(
+        (await app.request(mediaUrl.pathname.replace(/^\/api/, ""))).status,
+      ).toBe(200);
+    }
   });
 
   test("cleanup removes expired retired files but not live media", async () => {

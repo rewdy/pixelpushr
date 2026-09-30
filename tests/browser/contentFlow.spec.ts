@@ -895,7 +895,9 @@ test("visual picker and bulk draft edits preserve duplicate items and save bound
   await page.getByRole("checkbox", { name: "Select item 1" }).check();
   await page.getByRole("checkbox", { name: "Select item 3" }).check();
   await page.getByRole("checkbox", { name: "Select item 4" }).check();
-  await page.getByRole("button", { name: "Delete selected" }).click();
+  await page
+    .getByRole("button", { name: "Delete selected", exact: true })
+    .click();
   await expect(page.getByRole("checkbox", { name: /Select item/ })).toHaveCount(
     1,
   );
@@ -1017,8 +1019,13 @@ test("media library manages rename, tags, replacement, and informed deletion", a
   );
   await page.goto("/media");
   const row = () => page.getByRole("row").filter({ hasText: "brand" });
-  await row().getByRole("button", { name: "Rename" }).click();
-  const rename = page.getByRole("dialog", { name: "Rename brand.png" });
+  await row().getByRole("button", { name: "brand.png" }).click();
+  const rename = page.getByRole("dialog", { name: "Edit brand.png" });
+  await page.setViewportSize({ width: 420, height: 800 });
+  await expect(
+    rename.getByRole("textbox", { name: "Asset name" }),
+  ).toBeVisible();
+  await page.setViewportSize({ width: 1280, height: 800 });
   await rename
     .getByRole("textbox", { name: "Asset name" })
     .fill("brand refreshed.png");
@@ -1026,23 +1033,22 @@ test("media library manages rename, tags, replacement, and informed deletion", a
   await expect(
     page.getByRole("row").filter({ hasText: "brand refreshed.png" }),
   ).toBeVisible();
-  await row().getByRole("button", { name: "Tags" }).click();
-  const tagsDialog = page.getByRole("dialog", {
-    name: "Edit tags for brand refreshed.png",
-  });
+  const tagsDialog = rename;
   await tagsDialog.getByRole("textbox", { name: "Tags" }).fill("Weekly");
   await tagsDialog.getByRole("textbox", { name: "Tags" }).press("Enter");
   await tagsDialog.getByRole("button", { name: "Save tags" }).click();
   await expect(row()).toContainText("Weekly");
+  await rename.press("Escape");
+  await expect(rename).toBeHidden();
   await page.getByRole("textbox", { name: "Filter by tags" }).click();
   await page.getByRole("option", { name: "Weekly" }).click();
   await expect(row()).toBeVisible();
   await page.getByRole("textbox", { name: "Search media" }).fill("not-a-match");
   await expect(row()).toHaveCount(0);
   await page.getByRole("textbox", { name: "Search media" }).fill("");
-  await row().getByRole("button", { name: "Replace" }).click();
+  await row().getByRole("button", { name: "Edit" }).click();
   const replace = page.getByRole("dialog", {
-    name: "Replace brand refreshed.png",
+    name: "Edit brand refreshed.png",
   });
   await replace.locator('input[type="file"]').setInputFiles({
     name: "brand-new.png",
@@ -1073,7 +1079,7 @@ test("media library manages rename, tags, replacement, and informed deletion", a
     page.getByRole("button", { name: "Add brand refreshed.png" }),
   ).toBeVisible();
   await page.goto("/media");
-  await row().getByRole("button", { name: "Delete" }).click();
+  await row().getByRole("button", { name: "Delete", exact: true }).click();
   const remove = page.getByRole("dialog", {
     name: "Delete brand refreshed.png",
   });
@@ -1128,11 +1134,199 @@ test("media library manages rename, tags, replacement, and informed deletion", a
     .getByRole("row")
     .filter({ hasText: "unused-for-delete.png" });
   await expect(unusedRow).toBeVisible();
-  await unusedRow.getByRole("button", { name: "Delete" }).click();
+  await unusedRow.getByRole("button", { name: "Delete", exact: true }).click();
   const unusedDialog = page.getByRole("dialog", {
     name: "Delete unused-for-delete.png",
   });
   await expect(unusedDialog).toContainText("not used by any saved playlist");
   await unusedDialog.getByRole("button", { name: "Delete asset" }).click();
   await expect(unusedRow).toHaveCount(0);
+});
+
+test("media selection adds tags and reviews combined deletion", async ({
+  page,
+}) => {
+  test.setTimeout(60000);
+  await page.addInitScript(
+    (accessToken) =>
+      sessionStorage.setItem("pixelpushr-admin-session", accessToken),
+    token,
+  );
+  await page.goto("/media");
+  const buffer = Buffer.from(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/5QAAAABJRU5ErkJggg==",
+    "base64",
+  );
+  await page
+    .locator('input[type="file"]')
+    .first()
+    .setInputFiles([
+      { name: "bulk-a.png", mimeType: "image/png", buffer },
+      { name: "bulk-b.png", mimeType: "image/png", buffer },
+      { name: "bulk-keep.png", mimeType: "image/png", buffer },
+    ]);
+  const a = page.getByRole("row").filter({ hasText: "bulk-a.png" });
+  const b = page.getByRole("row").filter({ hasText: "bulk-b.png" });
+  await expect(a).toBeVisible();
+  await expect(b).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Add tags", exact: true }),
+  ).toBeDisabled();
+  await a.getByRole("checkbox", { name: "Select bulk-a.png" }).check();
+  await expect(page.getByText("1 selected")).toBeVisible();
+  await page.getByRole("button", { name: "Deselect all" }).click();
+  await expect(page.getByText("0 selected", { exact: true })).toBeVisible();
+  await page.getByRole("textbox", { name: "Search media" }).fill("bulk-");
+  await page.getByRole("button", { name: "Select all visible" }).click();
+  await expect(page.getByText("3 selected")).toBeVisible();
+  await page.getByRole("textbox", { name: "Search media" }).fill("bulk-a");
+  await expect(page.getByText("0 selected", { exact: true })).toBeVisible();
+  await page.getByRole("textbox", { name: "Search media" }).fill("bulk-");
+  await a.getByRole("checkbox", { name: "Select bulk-a.png" }).check();
+  await b.getByRole("checkbox", { name: "Select bulk-b.png" }).check();
+  await page.getByRole("button", { name: "Add tags", exact: true }).click();
+  const tagDialog = page.getByRole("dialog", { name: "Add tags to 2 assets" });
+  await tagDialog
+    .getByRole("textbox", { name: "Tags to add" })
+    .fill("Bulk campaign");
+  await tagDialog.getByRole("textbox", { name: "Tags to add" }).press("Enter");
+  await tagDialog.getByRole("textbox", { name: "Tags to add" }).press("Tab");
+  await tagDialog.getByRole("button", { name: "Add tags" }).click();
+  await expect(tagDialog).toBeHidden();
+  await expect(a).toContainText("Bulk campaign");
+  await expect(b).toContainText("Bulk campaign");
+  await expect(page.getByText("0 selected", { exact: true })).toBeVisible();
+  await page.getByRole("textbox", { name: "Filter by tags" }).click();
+  await page.getByRole("option", { name: "Bulk campaign" }).click();
+  await expect(
+    page.getByRole("row").filter({ hasText: "bulk-keep.png" }),
+  ).toHaveCount(0);
+  await page.getByRole("button", { name: "Select all visible" }).click();
+  await expect(page.getByText("2 selected")).toBeVisible();
+  await page.getByRole("textbox", { name: "Filter by tags" }).click();
+  await page.getByRole("option", { name: "Bulk campaign" }).click();
+  await expect(page.getByText("0 selected", { exact: true })).toBeVisible();
+  await a.getByRole("checkbox", { name: "Select bulk-a.png" }).check();
+  await b.getByRole("checkbox", { name: "Select bulk-b.png" }).check();
+  await expect(page.getByText("2 selected", { exact: true })).toBeVisible();
+  const bulkPlaylistId = await page.evaluate(async () => {
+    const headers = {
+      authorization: `Bearer ${sessionStorage.getItem("pixelpushr-admin-session")}`,
+      "content-type": "application/json",
+    };
+    const listed = await fetch("/api/admin/media", { headers });
+    const assets = (await listed.json()) as {
+      assets: Array<{ id: string; name: string }>;
+    };
+    const used = assets.assets.find((asset) => asset.name === "bulk-a.png");
+    const keep = assets.assets.find((asset) => asset.name === "bulk-keep.png");
+    if (!used || !keep) throw new Error("Missing bulk test media");
+    const created = await fetch("/api/admin/playlists", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ name: "Bulk browser playlist" }),
+    });
+    const { playlist } = (await created.json()) as { playlist: { id: string } };
+    const saved = await fetch(`/api/admin/playlists/${playlist.id}/items`, {
+      method: "PUT",
+      headers,
+      body: JSON.stringify({
+        items: [
+          { mediaAssetId: used.id, imageDurationMs: 3000 },
+          { mediaAssetId: keep.id, imageDurationMs: 4000 },
+        ],
+      }),
+    });
+    if (!saved.ok) throw new Error("Could not save bulk test playlist");
+    return playlist.id;
+  });
+  await page.getByRole("button", { name: "Delete selected" }).click();
+  const remove = page.getByRole("dialog", { name: "Delete 2 selected assets" });
+  await expect(remove).toContainText("bulk-a.png");
+  await expect(remove).toContainText("bulk-b.png");
+  await expect(remove).toContainText("Bulk browser playlist: 1 item");
+  await remove.press("Escape");
+  await expect(remove).toBeHidden();
+  await expect(a).toBeVisible();
+  await page
+    .getByRole("button", { name: "Delete selected", exact: true })
+    .click();
+  await page.evaluate(async (playlistId) => {
+    const headers = {
+      authorization: `Bearer ${sessionStorage.getItem("pixelpushr-admin-session")}`,
+      "content-type": "application/json",
+    };
+    const listed = await fetch("/api/admin/media", { headers });
+    const assets = (await listed.json()) as {
+      assets: Array<{ id: string; name: string }>;
+    };
+    const used = assets.assets.find((asset) => asset.name === "bulk-a.png");
+    const keep = assets.assets.find((asset) => asset.name === "bulk-keep.png");
+    if (!used || !keep) throw new Error("Missing bulk test media");
+    const saved = await fetch(`/api/admin/playlists/${playlistId}/items`, {
+      method: "PUT",
+      headers,
+      body: JSON.stringify({
+        items: [
+          { mediaAssetId: used.id, imageDurationMs: 3000 },
+          { mediaAssetId: keep.id, imageDurationMs: 4000 },
+          { mediaAssetId: used.id, imageDurationMs: 5000 },
+        ],
+      }),
+    });
+    if (!saved.ok) throw new Error("Could not change bulk test playlist");
+  }, bulkPlaylistId);
+  await remove
+    .getByRole("button", { name: "Delete selected assets and playlist uses" })
+    .click();
+  await expect(remove).toContainText("review deletion impact again");
+  await expect(remove).toContainText("Bulk browser playlist: 2 items");
+  await remove
+    .getByRole("button", { name: "Delete selected assets and playlist uses" })
+    .click();
+  await expect(remove).toBeHidden();
+  await expect(page.getByText("0 selected", { exact: true })).toBeVisible();
+  await expect(a).toHaveCount(0);
+  await expect(b).toHaveCount(0);
+  await page.reload();
+  await expect(
+    page.getByRole("row").filter({ hasText: "bulk-keep.png" }),
+  ).toBeVisible();
+  const keptItems = await page.evaluate(async (playlistId) => {
+    const response = await fetch(`/api/admin/playlists/${playlistId}`, {
+      headers: {
+        authorization: `Bearer ${sessionStorage.getItem("pixelpushr-admin-session")}`,
+      },
+    });
+    return response.json() as Promise<{
+      items: Array<{ asset: { name: string } }>;
+    }>;
+  }, bulkPlaylistId);
+  expect(keptItems.items.map((item) => item.asset.name)).toEqual([
+    "bulk-keep.png",
+  ]);
+  const pendingStatus = await page.evaluate(async () => {
+    const response = await fetch("/api/admin/media/uploads", {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${sessionStorage.getItem("pixelpushr-admin-session")}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        name: "pending-only.png",
+        mimeType: "image/png",
+        sizeBytes: 100,
+      }),
+    });
+    return response.status;
+  });
+  expect(pendingStatus).toBe(201);
+  await page.reload();
+  const pending = page.getByRole("row").filter({ hasText: "pending-only.png" });
+  await pending.getByRole("button", { name: "Edit" }).click();
+  await expect(
+    page
+      .getByRole("dialog", { name: "Edit pending-only.png" })
+      .getByRole("button", { name: "Replace file" }),
+  ).toBeDisabled();
 });

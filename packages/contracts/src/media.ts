@@ -33,6 +33,21 @@ export type MediaDeleteImpact = {
   }>;
 };
 
+export type BulkMediaTagsRequest = { assetIds: string[]; tags: string[] };
+
+export type BulkMediaDeleteImpact = {
+  assetIds: string[];
+  assets: Array<{ id: string; name: string; itemCount: number }>;
+  snapshotToken: string;
+  totalItems: number;
+  playlists: Array<{ id: string; name: string; itemIds: string[] }>;
+};
+
+export type BulkMediaDeleteRequest = {
+  assetIds: string[];
+  snapshotToken: string;
+};
+
 export type MediaReplacementStart = {
   mimeType: string;
   sizeBytes: number;

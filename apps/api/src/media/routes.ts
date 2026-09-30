@@ -16,7 +16,10 @@ import {
 } from "../db/schema";
 import { ApiError } from "../http/errors";
 import { parseJsonBody } from "../http/validation";
-import { buildMediaDeleteImpact } from "./deleteImpact";
+import {
+  buildBulkMediaDeleteImpact,
+  buildMediaDeleteImpact,
+} from "./deleteImpact";
 import { type MediaStorage, maxSmallObjectBytes } from "./storage";
 import {
   uploadDeclarationFailure,
@@ -48,6 +51,22 @@ const deleteSchema = z.object({
 });
 const tagsSchema = z.object({
   tags: z.array(z.string().trim().min(1).max(60)).max(20),
+});
+const bulkIdsSchema = z
+  .array(z.uuid())
+  .min(1)
+  .max(100)
+  .refine(
+    (ids) => new Set(ids).size === ids.length,
+    "Duplicate media IDs are not allowed",
+  );
+const bulkTagsSchema = z.object({
+  assetIds: bulkIdsSchema,
+  tags: z.array(z.string().trim().min(1).max(60)).min(1).max(20),
+});
+const bulkImpactSchema = z.object({ assetIds: bulkIdsSchema });
+const bulkDeleteSchema = bulkImpactSchema.extend({
+  snapshotToken: z.string().length(64),
 });
 const readBoundedThumbnail = async (request: Request): Promise<Uint8Array> => {
   const contentLength = Number(request.headers.get("content-length"));
@@ -185,6 +204,190 @@ export const registerMediaRoutes = (
     return context.json({
       tags: tags.sort((a, b) => a.name.localeCompare(b.name)),
     });
+  });
+
+  app.post("/admin/media/bulk/tags", async (context) => {
+    const { membership } = await getAdmin(context, db, auth);
+    const body = await parseJsonBody(context, bulkTagsSchema);
+    const ids = [...body.assetIds].sort();
+    const names = [
+      ...new Map(
+        body.tags.map((name) => [name.toLocaleLowerCase(), name]),
+      ).entries(),
+    ];
+    await db.transaction(async (transaction) => {
+      const locked = await transaction.execute(sql`SELECT id FROM media_assets
+        WHERE id IN (${sql.join(
+          ids.map((id) => sql`${id}`),
+          sql`, `,
+        )})
+          AND organization_id = ${membership.organizationId}
+        ORDER BY id FOR UPDATE`);
+      if (locked.length !== ids.length)
+        throw new ApiError(404, "not_found", "Media asset not found");
+      const existing = await transaction
+        .select({
+          mediaAssetId: mediaAssetTags.mediaAssetId,
+          tagId: mediaTags.id,
+          normalizedName: mediaTags.normalizedName,
+        })
+        .from(mediaAssetTags)
+        .innerJoin(mediaTags, eq(mediaAssetTags.tagId, mediaTags.id))
+        .where(inArray(mediaAssetTags.mediaAssetId, ids));
+      for (const id of ids) {
+        const current = new Set(
+          existing
+            .filter((tag) => tag.mediaAssetId === id)
+            .map((tag) => tag.normalizedName),
+        );
+        for (const [normalizedName] of names) current.add(normalizedName);
+        if (current.size > 20)
+          throw new ApiError(
+            400,
+            "invalid_request",
+            "An asset would exceed the 20-tag limit",
+          );
+      }
+      const tagIds = new Map<string, string>();
+      for (const [normalizedName, name] of names) {
+        const [tag] = await transaction
+          .insert(mediaTags)
+          .values({
+            organizationId: membership.organizationId,
+            name,
+            normalizedName,
+          })
+          .onConflictDoUpdate({
+            target: [mediaTags.organizationId, mediaTags.normalizedName],
+            set: { normalizedName },
+          })
+          .returning({ id: mediaTags.id });
+        if (tag) tagIds.set(normalizedName, tag.id);
+      }
+      const associations = ids.flatMap((id) =>
+        names.flatMap(([normalizedName]) => {
+          if (
+            existing.some(
+              (tag) =>
+                tag.mediaAssetId === id &&
+                tag.normalizedName === normalizedName,
+            )
+          )
+            return [];
+          const tagId = tagIds.get(normalizedName);
+          return tagId ? [{ mediaAssetId: id, tagId }] : [];
+        }),
+      );
+      if (associations.length)
+        await transaction
+          .insert(mediaAssetTags)
+          .values(associations)
+          .onConflictDoNothing();
+    });
+    return context.json({ updated: ids.length });
+  });
+
+  app.post("/admin/media/bulk/delete-impact", async (context) => {
+    const { membership } = await getAdmin(context, db, auth);
+    const { assetIds } = await parseJsonBody(context, bulkImpactSchema);
+    const impact = await db.transaction(async (transaction) => {
+      await transaction.execute(
+        sql`SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY`,
+      );
+      const assets = await transaction
+        .select()
+        .from(mediaAssets)
+        .where(
+          and(
+            eq(mediaAssets.organizationId, membership.organizationId),
+            inArray(mediaAssets.id, assetIds),
+          ),
+        );
+      if (assets.length !== assetIds.length)
+        throw new ApiError(404, "not_found", "Media asset not found");
+      const uses = await transaction
+        .select({
+          assetId: playlistItems.mediaAssetId,
+          itemId: playlistItems.id,
+          playlistId: playlists.id,
+          playlistName: playlists.name,
+        })
+        .from(playlistItems)
+        .innerJoin(playlists, eq(playlistItems.playlistId, playlists.id))
+        .where(inArray(playlistItems.mediaAssetId, assetIds));
+      return buildBulkMediaDeleteImpact(assets, uses);
+    });
+    return context.json(impact);
+  });
+
+  app.post("/admin/media/bulk/delete", async (context) => {
+    const { membership } = await getAdmin(context, db, auth);
+    const { assetIds, snapshotToken } = await parseJsonBody(
+      context,
+      bulkDeleteSchema,
+    );
+    const ids = [...assetIds].sort();
+    await db.transaction(async (transaction) => {
+      const locked = await transaction.execute(sql`SELECT id FROM media_assets
+        WHERE id IN (${sql.join(
+          ids.map((id) => sql`${id}`),
+          sql`, `,
+        )})
+          AND organization_id = ${membership.organizationId}
+        ORDER BY id FOR UPDATE`);
+      if (locked.length !== ids.length)
+        throw new ApiError(
+          409,
+          "conflict",
+          "Selected media changed; review deletion impact again",
+        );
+      const assets = await transaction
+        .select()
+        .from(mediaAssets)
+        .where(inArray(mediaAssets.id, ids));
+      const uses = await transaction
+        .select({
+          assetId: playlistItems.mediaAssetId,
+          itemId: playlistItems.id,
+          playlistId: playlists.id,
+          playlistName: playlists.name,
+        })
+        .from(playlistItems)
+        .innerJoin(playlists, eq(playlistItems.playlistId, playlists.id))
+        .where(inArray(playlistItems.mediaAssetId, ids));
+      const impact = buildBulkMediaDeleteImpact(assets, uses);
+      if (impact.snapshotToken !== snapshotToken)
+        throw new ApiError(
+          409,
+          "conflict",
+          "Selected media or playlist uses changed; review deletion impact again",
+        );
+      const candidates = await transaction
+        .select({ objectKey: mediaReplacements.objectKey })
+        .from(mediaReplacements)
+        .where(inArray(mediaReplacements.mediaAssetId, ids));
+      await transaction
+        .delete(playlistItems)
+        .where(inArray(playlistItems.mediaAssetId, ids));
+      await transaction.delete(mediaAssets).where(inArray(mediaAssets.id, ids));
+      const expiresAt = new Date(Date.now() + 7 * 86400000);
+      await transaction
+        .insert(retiredMediaObjects)
+        .values([
+          ...assets.flatMap((asset) => [
+            { objectKey: asset.objectKey, expiresAt },
+            ...(asset.thumbnailKey
+              ? [{ objectKey: asset.thumbnailKey, expiresAt }]
+              : []),
+          ]),
+          ...candidates.map((candidate) => ({
+            objectKey: candidate.objectKey,
+            expiresAt: new Date(Date.now() + 86400000),
+          })),
+        ])
+        .onConflictDoNothing();
+    });
+    return context.json({ deleted: ids.length });
   });
 
   app.post("/admin/media/uploads", async (context) => {
