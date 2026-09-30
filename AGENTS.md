@@ -1,6 +1,6 @@
 # Agent guide for pixelpushr
 
-Read [README.md](README.md) for setup, then [docs/architecture.md](docs/architecture.md), [docs/conventions.md](docs/conventions.md), and [docs/design-system.md](docs/design-system.md) for the decisions behind the code. [docs/operations.md](docs/operations.md) is the operator walkthrough. The archived [media-management tasks](openspec/changes/archive/2026-09-27-manage-media-library/tasks.md) record the completed refinement; the active [platform deployment task](openspec/changes/build-digital-signage-platform/tasks.md) remains an implementation checklist. Do not mark a task complete without verification.
+Read [README.md](README.md) for setup, then [docs/architecture.md](docs/architecture.md), [docs/conventions.md](docs/conventions.md), and [docs/design-system.md](docs/design-system.md) for the decisions behind the code. [docs/operations.md](docs/operations.md) is the operator walkthrough. The archived [UI navigation and previews change](openspec/changes/archive/2026-09-29-refine-ui-navigation-and-previews/tasks.md) records the latest completed refinement; the active [platform deployment task](openspec/changes/build-digital-signage-platform/tasks.md) remains an implementation checklist. Do not mark a task complete without verification.
 
 ## Repository map
 
