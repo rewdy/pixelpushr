@@ -4,7 +4,7 @@ import type {
   OverrideWindow,
   PlayerManifest,
 } from "@pixelpushr/contracts/manifest";
-import { and, asc, eq } from "drizzle-orm";
+import { and, asc, eq, sql } from "drizzle-orm";
 import type { Hono } from "hono";
 import { z } from "zod";
 import { getAdmin } from "../auth/guard";
@@ -21,6 +21,7 @@ import {
   scheduleRules,
 } from "../db/schema";
 import { ApiError } from "../http/errors";
+import { parsePagination } from "../http/pagination";
 import { parseJsonBody } from "../http/validation";
 import type { MediaStorage } from "../media/storage";
 import { coalesceWindows, occurrenceWindows } from "./recurrence";
@@ -252,11 +253,23 @@ export const registerDisplayRoutes = (
 ) => {
   app.get("/admin/displays", async (context) => {
     const { membership } = await getAdmin(context, db, auth);
-    const rows = await db
+    const pagination = parsePagination((key) => context.req.query(key));
+    const base = db
       .select()
       .from(displays)
       .where(eq(displays.organizationId, membership.organizationId))
-      .orderBy(asc(displays.name));
+      .orderBy(asc(sql`lower(${displays.name})`), asc(displays.id));
+    const rows = pagination
+      ? await base
+          .limit(pagination.pageSize)
+          .offset((pagination.page - 1) * pagination.pageSize)
+      : await base;
+    const [count] = pagination
+      ? await db
+          .select({ total: sql<number>`count(*)::int` })
+          .from(displays)
+          .where(eq(displays.organizationId, membership.organizationId))
+      : [];
     return context.json({
       displays: rows.map(
         ({ playerTokenHash: _playerTokenHash, playerToken, ...display }) => ({
@@ -264,6 +277,7 @@ export const registerDisplayRoutes = (
           playerUrl: playerUrl(publicWebUrl, playerToken),
         }),
       ),
+      ...(pagination ? { ...pagination, total: count?.total ?? 0 } : {}),
     });
   });
 

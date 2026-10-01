@@ -1,4 +1,4 @@
-import { and, eq, inArray, isNull, sql } from "drizzle-orm";
+import { and, asc, eq, ilike, inArray, isNull, sql } from "drizzle-orm";
 import type { Hono } from "hono";
 import { z } from "zod";
 import { getAdmin } from "../auth/guard";
@@ -15,6 +15,7 @@ import {
   retiredMediaObjects,
 } from "../db/schema";
 import { ApiError } from "../http/errors";
+import { parsePagination } from "../http/pagination";
 import { parseJsonBody } from "../http/validation";
 import {
   buildBulkMediaDeleteImpact,
@@ -148,6 +149,7 @@ export const registerMediaRoutes = (
       .where(eq(mediaAssetTags.mediaAssetId, assetId));
   app.get("/admin/media", async (context) => {
     const { membership } = await getAdmin(context, db, auth);
+    const pagination = parsePagination((key) => context.req.query(key));
     const search =
       context.req.query("search")?.trim().toLocaleLowerCase() ?? "";
     const tagIds = [
@@ -158,19 +160,58 @@ export const registerMediaRoutes = (
       tagIds.some((id) => !z.uuid().safeParse(id).success)
     )
       throw new ApiError(400, "invalid_request", "Invalid tag filter");
-    const assets = await db
+    const escapedSearch = search.replace(/[\\%_]/g, "\\$&");
+    const filter = and(
+      eq(mediaAssets.organizationId, membership.organizationId),
+      search ? ilike(mediaAssets.name, `%${escapedSearch}%`) : undefined,
+      tagIds.length
+        ? sql`EXISTS (
+            SELECT 1 FROM media_asset_tags mat
+            INNER JOIN media_tags mt ON mt.id = mat.tag_id
+            WHERE mat.media_asset_id = ${mediaAssets.id}
+              AND mt.organization_id = ${membership.organizationId}
+              AND mt.id IN (${sql.join(
+                tagIds.map((id) => sql`${id}`),
+                sql`, `,
+              )})
+          )`
+        : undefined,
+    );
+    const base = db
       .select()
       .from(mediaAssets)
-      .where(eq(mediaAssets.organizationId, membership.organizationId));
-    const tagRows = await db
-      .select({
-        mediaAssetId: mediaAssetTags.mediaAssetId,
-        id: mediaTags.id,
-        name: mediaTags.name,
-      })
-      .from(mediaAssetTags)
-      .innerJoin(mediaTags, eq(mediaAssetTags.tagId, mediaTags.id))
-      .where(eq(mediaTags.organizationId, membership.organizationId));
+      .where(filter)
+      .orderBy(asc(sql`lower(${mediaAssets.name})`), asc(mediaAssets.id));
+    const assets = pagination
+      ? await base
+          .limit(pagination.pageSize)
+          .offset((pagination.page - 1) * pagination.pageSize)
+      : await base;
+    const [count] = pagination
+      ? await db
+          .select({ total: sql<number>`count(*)::int` })
+          .from(mediaAssets)
+          .where(filter)
+      : [];
+    const tagRows = assets.length
+      ? await db
+          .select({
+            mediaAssetId: mediaAssetTags.mediaAssetId,
+            id: mediaTags.id,
+            name: mediaTags.name,
+          })
+          .from(mediaAssetTags)
+          .innerJoin(mediaTags, eq(mediaAssetTags.tagId, mediaTags.id))
+          .where(
+            and(
+              eq(mediaTags.organizationId, membership.organizationId),
+              inArray(
+                mediaAssetTags.mediaAssetId,
+                assets.map((asset) => asset.id),
+              ),
+            ),
+          )
+      : [];
     const byAsset = new Map<string, Array<{ id: string; name: string }>>();
     for (const tag of tagRows) {
       const tags = byAsset.get(tag.mediaAssetId) ?? [];
@@ -178,20 +219,13 @@ export const registerMediaRoutes = (
       byAsset.set(tag.mediaAssetId, tags);
     }
     return context.json({
-      assets: assets
-        .filter((asset) => {
-          const tags = byAsset.get(asset.id) ?? [];
-          return (
-            (!search || asset.name.toLocaleLowerCase().includes(search)) &&
-            (!tagIds.length || tags.some((tag) => tagIds.includes(tag.id)))
-          );
-        })
-        .map((asset) => ({
-          ...serializeAsset(asset, storage),
-          tags: (byAsset.get(asset.id) ?? []).sort((a, b) =>
-            a.name.localeCompare(b.name),
-          ),
-        })),
+      assets: assets.map((asset) => ({
+        ...serializeAsset(asset, storage),
+        tags: (byAsset.get(asset.id) ?? []).sort((a, b) =>
+          a.name.localeCompare(b.name),
+        ),
+      })),
+      ...(pagination ? { ...pagination, total: count?.total ?? 0 } : {}),
     });
   });
 

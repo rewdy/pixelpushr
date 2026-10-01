@@ -9,22 +9,35 @@ import {
   TextInput,
   Title,
 } from "@mantine/core";
+import type { PagedList } from "@pixelpushr/contracts/pagination";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { LuPlus } from "react-icons/lu";
 import { Link, useLocation } from "wouter";
 import { requestJson } from "../../helpers/api";
+import { useListingPage } from "../../hooks/useListingPage";
 import type { Playlist } from "../../models/media.models";
+import { PageControls } from "../PageControls";
 
 /** Lists playlists and creates a new ordered content collection. */
 export const PlaylistsPage = () => {
   const [, navigate] = useLocation();
   const queryClient = useQueryClient();
+  const { page, setPage } = useListingPage();
+  const pageSize = 25;
   const [name, setName] = useState("");
   const playlists = useQuery({
-    queryKey: ["playlists"],
-    queryFn: () => requestJson<{ playlists: Playlist[] }>("/admin/playlists"),
+    queryKey: ["playlists", "list", page],
+    queryFn: () =>
+      requestJson<PagedList<"playlists", Playlist>>(
+        `/admin/playlists?page=${page}&pageSize=${pageSize}`,
+      ),
   });
+  useEffect(() => {
+    if (!playlists.data) return;
+    const lastPage = Math.max(1, Math.ceil(playlists.data.total / pageSize));
+    if (page > lastPage) setPage(lastPage);
+  }, [playlists.data, page, setPage]);
   const create = useMutation({
     mutationFn: () =>
       requestJson<{ playlist: Playlist }>("/admin/playlists", {
@@ -104,13 +117,30 @@ export const PlaylistsPage = () => {
             </Table.Tbody>
           </Table>
         </Table.ScrollContainer>
-        {playlists.data?.playlists.length === 0 && (
+        {playlists.isPending && (
           <Text c="dimmed" ta="center" py="xl">
-            No playlists yet.
+            Loading playlists…
           </Text>
         )}
+        {!playlists.isPending &&
+          !playlists.error &&
+          playlists.data?.playlists.length === 0 && (
+            <Text c="dimmed" ta="center" py="xl">
+              {playlists.data.total
+                ? "No playlists on this page."
+                : "No playlists yet."}
+            </Text>
+          )}
         {playlists.error && (
           <Alert color="red">{playlists.error.message}</Alert>
+        )}
+        {playlists.data && (
+          <PageControls
+            page={page}
+            pageSize={pageSize}
+            total={playlists.data.total}
+            onPageChange={setPage}
+          />
         )}
       </Paper>
     </Stack>

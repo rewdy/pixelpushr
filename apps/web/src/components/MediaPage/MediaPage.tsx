@@ -21,23 +21,40 @@ import type {
   MediaDeleteImpact,
   MediaTag,
 } from "@pixelpushr/contracts/media";
+import type { PagedList } from "@pixelpushr/contracts/pagination";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { LuUpload } from "react-icons/lu";
 import { requestJson } from "../../helpers/api";
-import { filterMediaAssets } from "../../helpers/mediaFilters";
 import { replaceMediaFile } from "../../helpers/mediaUpload";
+import { useListingPage } from "../../hooks/useListingPage";
 import { useMediaUploadQueue } from "../../hooks/useMediaUploadQueue";
 import type { MediaAsset } from "../../models/media.models";
 import { MediaThumbnail } from "../MediaThumbnail/MediaThumbnail";
+import { PageControls } from "../PageControls";
 import classes from "./MediaPage.module.css";
 
 /** Accepts image/video batches from the picker or a page-wide drop target. */
 export const MediaPage = () => {
   const queryClient = useQueryClient();
+  const { page, setPage, params, setParams } = useListingPage();
+  const search = params.get("search") ?? "";
+  const tagIds = (params.get("tags") ?? "").split(",").filter(Boolean);
+  const tagKey = tagIds.join(",");
+  const pageSize = 25;
   const assets = useQuery({
-    queryKey: ["media"],
-    queryFn: () => requestJson<{ assets: MediaAsset[] }>("/admin/media"),
+    queryKey: ["media", "list", page, search, tagKey],
+    queryFn: () => {
+      const query = new URLSearchParams({
+        page: String(page),
+        pageSize: String(pageSize),
+      });
+      if (search.trim()) query.set("search", search.trim());
+      if (tagIds.length) query.set("tags", tagKey);
+      return requestJson<PagedList<"assets", MediaAsset>>(
+        `/admin/media?${query}`,
+      );
+    },
   });
   const tags = useQuery({
     queryKey: ["media-tags"],
@@ -45,8 +62,6 @@ export const MediaPage = () => {
   });
   const { entries, enqueue } = useMediaUploadQueue();
   const [draggingFiles, setDraggingFiles] = useState(false);
-  const [search, setSearch] = useState("");
-  const [tagIds, setTagIds] = useState<string[]>([]);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [bulkAction, setBulkAction] = useState<"tags" | "delete" | null>(null);
   const [bulkTagNames, setBulkTagNames] = useState<string[]>([]);
@@ -73,11 +88,14 @@ export const MediaPage = () => {
       }),
     enabled: bulkAction === "delete" && selectedIds.length > 0,
   });
-  const visibleAssets = filterMediaAssets(
-    assets.data?.assets ?? [],
-    search,
-    tagIds,
-  );
+  const visibleAssets = assets.data?.assets ?? [];
+  // biome-ignore lint/correctness/useExhaustiveDependencies: Page and URL filter changes intentionally clear local bulk selection.
+  useEffect(() => setSelectedIds([]), [page, search, tagKey]);
+  useEffect(() => {
+    if (!assets.data) return;
+    const lastPage = Math.max(1, Math.ceil(assets.data.total / pageSize));
+    if (page > lastPage) setPage(lastPage);
+  }, [assets.data, page, setPage]);
   useEffect(() => {
     if (!assets.data) return;
     const available = new Set(assets.data.assets.map((asset) => asset.id));
@@ -92,6 +110,33 @@ export const MediaPage = () => {
   const selectAllVisible = () => {
     const visible = visibleAssets.map((asset) => asset.id);
     setSelectedIds((current) => [...new Set([...current, ...visible])]);
+  };
+  const changeSearch = (value: string) => {
+    setSelectedIds([]);
+    setParams(
+      (current) => {
+        const next = new URLSearchParams(current);
+        if (value) next.set("search", value);
+        else next.delete("search");
+        next.delete("page");
+        return next;
+      },
+      { replace: true },
+    );
+  };
+  const changeTags = (value: string[]) => {
+    setSelectedIds([]);
+    setParams((current) => {
+      const next = new URLSearchParams(current);
+      if (value.length) next.set("tags", value.join(","));
+      else next.delete("tags");
+      next.delete("page");
+      return next;
+    });
+  };
+  const changePage = (nextPage: number) => {
+    setSelectedIds([]);
+    setPage(nextPage);
   };
   const runBulk = async (
     work: () => Promise<unknown>,
@@ -254,10 +299,7 @@ export const MediaPage = () => {
           label="Search media"
           placeholder="Search by name"
           value={search}
-          onChange={(event) => {
-            setSearch(event.currentTarget.value);
-            setSelectedIds([]);
-          }}
+          onChange={(event) => changeSearch(event.currentTarget.value)}
         />
         <MultiSelect
           label="Filter by tags"
@@ -267,10 +309,7 @@ export const MediaPage = () => {
             label: tag.name,
           }))}
           value={tagIds}
-          onChange={(value) => {
-            setTagIds(value);
-            setSelectedIds([]);
-          }}
+          onChange={changeTags}
           clearable
         />
       </Group>
@@ -439,14 +478,29 @@ export const MediaPage = () => {
             </Table.Tbody>
           </Table>
         </Table.ScrollContainer>
-        {visibleAssets.length === 0 && (
+        {assets.isPending && (
           <Text c="dimmed" ta="center" py="xl">
-            {assets.data?.assets.length
+            Loading media…
+          </Text>
+        )}
+        {!assets.isPending && !assets.error && visibleAssets.length === 0 && (
+          <Text c="dimmed" ta="center" py="xl">
+            {assets.data?.total
               ? "No matching media."
-              : "No media yet. Upload an image or video to start."}
+              : search || tagIds.length
+                ? "No matching media."
+                : "No media yet. Upload an image or video to start."}
           </Text>
         )}
         {assets.error && <Alert color="red">{assets.error.message}</Alert>}
+        {assets.data && (
+          <PageControls
+            page={page}
+            pageSize={pageSize}
+            total={assets.data.total}
+            onPageChange={changePage}
+          />
+        )}
       </Paper>
       <Drawer
         opened={action === "edit"}

@@ -12,6 +12,7 @@ import {
   TextInput,
   Title,
 } from "@mantine/core";
+import type { PagedList } from "@pixelpushr/contracts/pagination";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import {
@@ -25,7 +26,9 @@ import {
 } from "react-icons/lu";
 import { Link, useParams } from "wouter";
 import { requestJson } from "../../helpers/api";
+import { useListingPage } from "../../hooks/useListingPage";
 import type { Playlist } from "../../models/media.models";
+import { PageControls } from "../PageControls";
 import { PageTitle } from "../PageTitle";
 import { AddPlaylistDrawer } from "./AddPlaylistDrawer";
 import {
@@ -39,12 +42,22 @@ import { ScheduleTimePreview } from "./ScheduleTimePreview";
 /** Registers displays and exposes each public browser player URL. */
 export const DisplaysPage = () => {
   const queryClient = useQueryClient();
+  const { page, setPage } = useListingPage();
+  const pageSize = 25;
   const [name, setName] = useState("");
   const displays = useQuery({
-    queryKey: ["displays"],
-    queryFn: () => requestJson<{ displays: Display[] }>("/admin/displays"),
+    queryKey: ["displays", "list", page],
+    queryFn: () =>
+      requestJson<PagedList<"displays", Display>>(
+        `/admin/displays?page=${page}&pageSize=${pageSize}`,
+      ),
     refetchInterval: 30000,
   });
+  useEffect(() => {
+    if (!displays.data) return;
+    const lastPage = Math.max(1, Math.ceil(displays.data.total / pageSize));
+    if (page > lastPage) setPage(lastPage);
+  }, [displays.data, page, setPage]);
   const create = useMutation({
     mutationFn: () =>
       requestJson("/admin/displays", {
@@ -169,12 +182,29 @@ export const DisplaysPage = () => {
             </Table.Tbody>
           </Table>
         </Table.ScrollContainer>
-        {displays.data?.displays.length === 0 && (
+        {displays.isPending && (
           <Text c="dimmed" ta="center" py="xl">
-            No displays registered yet.
+            Loading displays…
           </Text>
         )}
+        {!displays.isPending &&
+          !displays.error &&
+          displays.data?.displays.length === 0 && (
+            <Text c="dimmed" ta="center" py="xl">
+              {displays.data.total
+                ? "No displays on this page."
+                : "No displays registered yet."}
+            </Text>
+          )}
         {displays.error && <Alert color="red">{displays.error.message}</Alert>}
+        {displays.data && (
+          <PageControls
+            page={page}
+            pageSize={pageSize}
+            total={displays.data.total}
+            onPageChange={setPage}
+          />
+        )}
       </Paper>
     </Stack>
   );

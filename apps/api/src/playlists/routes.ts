@@ -14,6 +14,7 @@ import {
   playlists,
 } from "../db/schema";
 import { ApiError } from "../http/errors";
+import { parsePagination } from "../http/pagination";
 import { parseJsonBody } from "../http/validation";
 import type { MediaStorage } from "../media/storage";
 
@@ -67,12 +68,25 @@ export const registerPlaylistRoutes = (
 ) => {
   app.get("/admin/playlists", async (context) => {
     const { membership } = await getAdmin(context, db, auth);
-    const rows = await db
+    const pagination = parsePagination((key) => context.req.query(key));
+    const base = db
       .select()
       .from(playlists)
       .where(eq(playlists.organizationId, membership.organizationId))
-      .orderBy(asc(playlists.name));
-    return context.json({ playlists: rows });
+      .orderBy(asc(sql`lower(${playlists.name})`), asc(playlists.id));
+    if (!pagination) return context.json({ playlists: await base });
+    const [count] = await db
+      .select({ total: sql<number>`count(*)::int` })
+      .from(playlists)
+      .where(eq(playlists.organizationId, membership.organizationId));
+    const rows = await base
+      .limit(pagination.pageSize)
+      .offset((pagination.page - 1) * pagination.pageSize);
+    return context.json({
+      playlists: rows,
+      ...pagination,
+      total: count?.total ?? 0,
+    });
   });
 
   app.post("/admin/playlists", async (context) => {

@@ -4,8 +4,11 @@ import { migrate } from "drizzle-orm/postgres-js/migrator";
 import postgres from "postgres";
 import { createDatabase } from "../../apps/api/src/db/client";
 import {
+  displays,
   mediaAssets,
   mediaReplacements,
+  playlistItems,
+  playlists,
   retiredMediaObjects,
 } from "../../apps/api/src/db/schema";
 import { createS3Storage } from "../../apps/api/src/media/storage";
@@ -1322,6 +1325,9 @@ test("media selection adds tags and reviews combined deletion", async ({
   });
   expect(pendingStatus).toBe(201);
   await page.reload();
+  await page
+    .getByRole("textbox", { name: "Search media" })
+    .fill("pending-only");
   const pending = page.getByRole("row").filter({ hasText: "pending-only.png" });
   await pending.getByRole("button", { name: "Edit" }).click();
   await expect(
@@ -1329,4 +1335,187 @@ test("media selection adds tags and reviews combined deletion", async ({
       .getByRole("dialog", { name: "Edit pending-only.png" })
       .getByRole("button", { name: "Replace file" }),
   ).toBeDisabled();
+});
+
+test("top-level pages keep filters, selection, and ordered editors in scope", async ({
+  page,
+}) => {
+  test.setTimeout(120000);
+  const existing = await connection.db.query.mediaAssets.findFirst();
+  if (!existing) throw new Error("Missing browser workspace media");
+  const organizationId = existing.organizationId;
+  const mediaRows = await connection.db
+    .insert(mediaAssets)
+    .values(
+      Array.from({ length: 30 }, (_, index) => ({
+        organizationId,
+        name: `Paging asset ${String(index + 1).padStart(2, "0")}`,
+        kind: "image" as const,
+        status: "ready" as const,
+        mimeType: "image/png",
+        objectKey: `${organizationId}/${crypto.randomUUID()}`,
+        sizeBytes: 10,
+      })),
+    )
+    .returning();
+  const playlistRows = await connection.db
+    .insert(playlists)
+    .values(
+      Array.from({ length: 30 }, (_, index) => ({
+        organizationId,
+        name: `Paging playlist ${String(index + 1).padStart(2, "0")}`,
+      })),
+    )
+    .returning();
+  const [orderedPlaylist] = await connection.db
+    .insert(playlists)
+    .values({
+      organizationId,
+      name: "Paging ordered playlist",
+    })
+    .returning();
+  if (!orderedPlaylist) throw new Error("Missing ordered playlist");
+  await connection.db.insert(playlistItems).values(
+    mediaRows.map((asset, position) => ({
+      playlistId: orderedPlaylist.id,
+      mediaAssetId: asset.id,
+      position,
+      imageDurationMs: 3000,
+    })),
+  );
+  const displayRows = await connection.db
+    .insert(displays)
+    .values(
+      Array.from({ length: 30 }, (_, index) => ({
+        organizationId,
+        name: `Paging display ${String(index + 1).padStart(2, "0")}`,
+        playerToken: crypto.randomUUID(),
+        playerTokenHash: crypto.randomUUID(),
+      })),
+    )
+    .returning();
+  const assignedDisplay = displayRows[0];
+  if (!assignedDisplay) throw new Error("Missing paging display");
+  const savedAssignments = await fetch(
+    `http://127.0.0.1:${apiPort}/admin/displays/${assignedDisplay.id}/always`,
+    {
+      method: "PUT",
+      headers: {
+        authorization: `Bearer ${token}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        playlistIds: playlistRows.map((item) => item.id),
+      }),
+    },
+  );
+  expect(savedAssignments.status).toBe(200);
+
+  await page.addInitScript(
+    (accessToken) =>
+      sessionStorage.setItem("pixelpushr-admin-session", accessToken),
+    token,
+  );
+  await page.goto("/media?page=2&search=Paging%20asset");
+  await expect(page.getByText("Showing 26–30 of 30 results")).toBeVisible();
+  await expect(
+    page.getByRole("row").filter({ hasText: "Paging asset 30" }),
+  ).toBeVisible();
+  await page.reload();
+  await expect(page).toHaveURL(/page=2/);
+  await expect(
+    page.getByRole("row").filter({ hasText: "Paging asset 30" }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Select all visible" }).click();
+  await expect(page.getByText("5 selected")).toBeVisible();
+  await page.getByRole("button", { name: "Add tags", exact: true }).click();
+  const bulkTags = page.getByRole("dialog", { name: "Add tags to 5 assets" });
+  await bulkTags
+    .getByRole("textbox", { name: "Tags to add" })
+    .fill("Second page");
+  await bulkTags.getByRole("textbox", { name: "Tags to add" }).press("Enter");
+  await bulkTags.getByRole("textbox", { name: "Tags to add" }).press("Tab");
+  await bulkTags.getByRole("button", { name: "Add tags" }).click();
+  await expect(bulkTags).toBeHidden();
+  await page
+    .getByRole("row")
+    .filter({ hasText: "Paging asset 30" })
+    .getByRole("checkbox")
+    .check();
+  await page.getByRole("button", { name: "Previous" }).click();
+  await expect(page.getByText("0 selected", { exact: true })).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Delete selected", exact: true }),
+  ).toBeDisabled();
+  await expect(
+    page.getByRole("row").filter({ hasText: "Paging asset 01" }),
+  ).not.toContainText("Second page");
+  await page.getByRole("button", { name: "Next" }).click();
+  await page
+    .getByRole("textbox", { name: "Search media" })
+    .fill("Paging asset 30");
+  await expect(page).not.toHaveURL(/page=2/);
+  await expect(page.getByText("Showing 1–1 of 1 results")).toBeVisible();
+  await expect(
+    page.getByRole("row").filter({ hasText: "Paging asset 30" }),
+  ).toBeVisible();
+
+  await page.goto("/playlists?page=2");
+  await expect(page.getByText(/Page 2 of/)).toBeVisible();
+  await expect(
+    page.getByRole("row").filter({ hasText: "Paging playlist 30" }),
+  ).toBeVisible();
+  await page.reload();
+  await expect(page).toHaveURL(/page=2/);
+  await page
+    .getByRole("textbox", { name: "New playlist" })
+    .fill("Paging new playlist");
+  await page.getByRole("button", { name: "Create playlist" }).click();
+  await expect(page).toHaveURL(/\/playlists\/[a-f0-9-]+$/);
+  await page.goto("/playlists?page=999");
+  await expect(page).not.toHaveURL(/page=999/);
+  await page.goto(`/playlists/${orderedPlaylist.id}`);
+  await expect(page.getByRole("checkbox", { name: /Select item/ })).toHaveCount(
+    30,
+  );
+  await page.getByRole("button", { name: "Add media" }).click();
+  await page
+    .getByRole("textbox", { name: "Search ready media" })
+    .fill("Paging asset 30");
+  await expect(
+    page.getByRole("button", { name: "Add Paging asset 30" }),
+  ).toBeVisible();
+
+  await page.goto("/displays?page=2");
+  await expect(page.getByText(/Page 2 of/)).toBeVisible();
+  await expect(
+    page.getByRole("row").filter({ hasText: "Paging display 30" }),
+  ).toBeVisible();
+  await page.reload();
+  await expect(page).toHaveURL(/page=2/);
+  await page
+    .getByRole("textbox", { name: "Display name" })
+    .fill("Paging added display");
+  await page.getByRole("button", { name: "Register display" }).click();
+  await expect(page.getByText(/Showing .* of .* results/)).toBeVisible();
+  await page.goto("/displays?page=999");
+  await expect(page).not.toHaveURL(/page=999/);
+  await page.goto(`/displays/${assignedDisplay.id}`);
+  await expect(
+    page.getByRole("heading", { name: "Assigned playlists" }),
+  ).toBeVisible();
+  await expect(
+    page.getByText("Paging playlist 30", { exact: true }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Add playlist" }).click();
+  await page
+    .getByRole("textbox", { name: "Playlist", exact: true })
+    .fill("Paging playlist 30");
+  await expect(
+    page.getByRole("option", { name: "Paging playlist 30" }),
+  ).toBeVisible();
+  await page.goto("/");
+  await expect(
+    page.getByTestId(`display-card-${displayRows[29]?.id}`),
+  ).toBeVisible();
 });
