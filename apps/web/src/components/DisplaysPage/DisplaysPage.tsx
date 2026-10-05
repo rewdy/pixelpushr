@@ -5,6 +5,7 @@ import {
   Button,
   CopyButton,
   Group,
+  Modal,
   Paper,
   Stack,
   Table,
@@ -45,6 +46,14 @@ export const DisplaysPage = () => {
   const { page, setPage } = useListingPage();
   const pageSize = 25;
   const [name, setName] = useState("");
+  const [createOpen, setCreateOpen] = useState(false);
+  const [nameError, setNameError] = useState("");
+  const closeCreate = () => {
+    setCreateOpen(false);
+    setName("");
+    setNameError("");
+    create.reset();
+  };
   const displays = useQuery({
     queryKey: ["displays", "list", page],
     queryFn: () =>
@@ -65,7 +74,7 @@ export const DisplaysPage = () => {
         body: JSON.stringify({ name }),
       }),
     onSuccess: () => {
-      setName("");
+      closeCreate();
       void queryClient.invalidateQueries({ queryKey: ["displays"] });
     },
   });
@@ -81,27 +90,12 @@ export const DisplaysPage = () => {
         </Text>
       </Stack>
       <Paper withBorder p="lg">
-        <Group align="end">
-          <TextInput
-            label="Display name"
-            placeholder="Lobby TV"
-            value={name}
-            onChange={(event) => setName(event.currentTarget.value)}
-            style={{ flex: 1 }}
-          />
-          <Button
-            leftSection={<LuPlus size={16} />}
-            loading={create.isPending}
-            onClick={() => create.mutate()}
-          >
-            Register display
-          </Button>
-        </Group>
-        {create.error && (
-          <Alert color="red" mt="md">
-            {create.error.message}
-          </Alert>
-        )}
+        <Button
+          leftSection={<LuPlus size={16} />}
+          onClick={() => setCreateOpen(true)}
+        >
+          Register display
+        </Button>
       </Paper>
       <Paper withBorder p="lg">
         <Table.ScrollContainer minWidth={660}>
@@ -119,7 +113,15 @@ export const DisplaysPage = () => {
                 <Table.Tr key={display.id}>
                   <Table.Td>
                     <Stack gap={0}>
-                      <Text fw={600}>{display.name}</Text>
+                      <Text
+                        component={Link}
+                        href={`/displays/${display.id}`}
+                        fw={600}
+                        c="brand"
+                        td="underline"
+                      >
+                        {display.name}
+                      </Text>
                       <Badge
                         size="xs"
                         variant="light"
@@ -206,6 +208,52 @@ export const DisplaysPage = () => {
           />
         )}
       </Paper>
+      <Modal
+        opened={createOpen}
+        onClose={closeCreate}
+        title="Register display"
+        centered
+      >
+        <form
+          noValidate
+          onSubmit={(event) => {
+            event.preventDefault();
+            if (!name.trim()) {
+              setNameError("Enter a display name.");
+              return;
+            }
+            if (name.trim().length > 160) {
+              setNameError("Use 160 characters or fewer.");
+              return;
+            }
+            setNameError("");
+            create.mutate();
+          }}
+        >
+          <Stack>
+            <TextInput
+              label="Display name"
+              placeholder="Lobby TV"
+              value={name}
+              error={nameError}
+              onChange={(event) => {
+                setName(event.currentTarget.value);
+                setNameError("");
+              }}
+              autoFocus
+            />
+            {create.error && <Alert color="red">{create.error.message}</Alert>}
+            <Group justify="flex-end">
+              <Button variant="subtle" onClick={closeCreate}>
+                Cancel
+              </Button>
+              <Button type="submit" loading={create.isPending}>
+                Register display
+              </Button>
+            </Group>
+          </Stack>
+        </form>
+      </Modal>
     </Stack>
   );
 };

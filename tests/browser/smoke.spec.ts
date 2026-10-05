@@ -94,10 +94,14 @@ test("owner can send an invitation through the console", async ({ page }) => {
   await expect(
     page.getByRole("heading", { name: "People & access" }),
   ).toBeVisible();
+  await page.getByRole("button", { name: "Send invitation" }).click();
   await page
     .getByRole("textbox", { name: "Email address" })
     .fill("new-admin@example.com");
-  await page.getByRole("button", { name: "Send invitation" }).click();
+  await page
+    .getByRole("dialog", { name: "Send invitation" })
+    .getByRole("button", { name: "Send invitation" })
+    .click();
   await expect(page.getByText("Invitation sent.")).toBeVisible();
   expect(invitedEmail).toBe("new-admin@example.com");
 });
@@ -190,8 +194,12 @@ test("admin can upload media and save a playable playlist", async ({
   });
   await expect(page.getByText("Media is ready for playlists.")).toBeVisible();
   await page.goto("/playlists");
-  await page.getByRole("textbox", { name: "New playlist" }).fill("Brand loop");
   await page.getByRole("button", { name: "Create playlist" }).click();
+  await page.getByRole("textbox", { name: "New playlist" }).fill("Brand loop");
+  await page
+    .getByRole("dialog", { name: "Create playlist" })
+    .getByRole("button", { name: "Create playlist" })
+    .click();
   await expect(page.getByRole("heading", { name: "Brand loop" })).toBeVisible();
   await page.getByRole("button", { name: "Add media" }).click();
   await page.getByRole("button", { name: "Add logo.png" }).click();

@@ -2,6 +2,7 @@ import {
   Alert,
   Button,
   Group,
+  Modal,
   Paper,
   Stack,
   Table,
@@ -26,6 +27,14 @@ export const PlaylistsPage = () => {
   const { page, setPage } = useListingPage();
   const pageSize = 25;
   const [name, setName] = useState("");
+  const [createOpen, setCreateOpen] = useState(false);
+  const [nameError, setNameError] = useState("");
+  const closeCreate = () => {
+    setCreateOpen(false);
+    setName("");
+    setNameError("");
+    create.reset();
+  };
   const playlists = useQuery({
     queryKey: ["playlists", "list", page],
     queryFn: () =>
@@ -46,6 +55,7 @@ export const PlaylistsPage = () => {
       }),
     onSuccess: ({ playlist }) => {
       void queryClient.invalidateQueries({ queryKey: ["playlists"] });
+      closeCreate();
       navigate(`/playlists/${playlist.id}`);
     },
   });
@@ -61,27 +71,12 @@ export const PlaylistsPage = () => {
         </Text>
       </Stack>
       <Paper withBorder p="lg">
-        <Group align="end">
-          <TextInput
-            label="New playlist"
-            placeholder="Brand loop"
-            value={name}
-            onChange={(event) => setName(event.currentTarget.value)}
-            style={{ flex: 1 }}
-          />
-          <Button
-            leftSection={<LuPlus size={16} />}
-            loading={create.isPending}
-            onClick={() => create.mutate()}
-          >
-            Create playlist
-          </Button>
-        </Group>
-        {create.error && (
-          <Alert color="red" mt="md">
-            {create.error.message}
-          </Alert>
-        )}
+        <Button
+          leftSection={<LuPlus size={16} />}
+          onClick={() => setCreateOpen(true)}
+        >
+          Create playlist
+        </Button>
       </Paper>
       <Paper withBorder p="lg">
         <Table.ScrollContainer minWidth={450}>
@@ -97,7 +92,15 @@ export const PlaylistsPage = () => {
               {playlists.data?.playlists.map((playlist) => (
                 <Table.Tr key={playlist.id}>
                   <Table.Td>
-                    <Text fw={600}>{playlist.name}</Text>
+                    <Text
+                      component={Link}
+                      href={`/playlists/${playlist.id}`}
+                      fw={600}
+                      c="brand"
+                      td="underline"
+                    >
+                      {playlist.name}
+                    </Text>
                   </Table.Td>
                   <Table.Td>
                     {new Date(playlist.updatedAt).toLocaleDateString()}
@@ -143,6 +146,52 @@ export const PlaylistsPage = () => {
           />
         )}
       </Paper>
+      <Modal
+        opened={createOpen}
+        onClose={closeCreate}
+        title="Create playlist"
+        centered
+      >
+        <form
+          noValidate
+          onSubmit={(event) => {
+            event.preventDefault();
+            if (!name.trim()) {
+              setNameError("Enter a playlist name.");
+              return;
+            }
+            if (name.trim().length > 160) {
+              setNameError("Use 160 characters or fewer.");
+              return;
+            }
+            setNameError("");
+            create.mutate();
+          }}
+        >
+          <Stack>
+            <TextInput
+              label="New playlist"
+              placeholder="Brand loop"
+              value={name}
+              error={nameError}
+              onChange={(event) => {
+                setName(event.currentTarget.value);
+                setNameError("");
+              }}
+              autoFocus
+            />
+            {create.error && <Alert color="red">{create.error.message}</Alert>}
+            <Group justify="flex-end">
+              <Button variant="subtle" onClick={closeCreate}>
+                Cancel
+              </Button>
+              <Button type="submit" loading={create.isPending}>
+                Create playlist
+              </Button>
+            </Group>
+          </Stack>
+        </form>
+      </Modal>
     </Stack>
   );
 };

@@ -5,6 +5,7 @@ import "@fontsource/space-mono/400.css";
 import "@mantine/core/styles.css";
 import "@mantine/dates/styles.css";
 import { MantineProvider } from "@mantine/core";
+import { DatesProvider } from "@mantine/dates";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { createRoot } from "react-dom/client";
 import { App } from "./App";
@@ -16,7 +17,9 @@ if (!root) throw new Error("Missing root element");
 createRoot(root).render(
   <QueryClientProvider client={queryClient}>
     <MantineProvider theme={theme} defaultColorScheme="auto">
-      <App />
+      <DatesProvider settings={{ firstDayOfWeek: 0 }}>
+        <App />
+      </DatesProvider>
     </MantineProvider>
   </QueryClientProvider>,
 );

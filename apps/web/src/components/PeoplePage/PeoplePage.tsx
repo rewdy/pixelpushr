@@ -4,6 +4,7 @@ import {
   Button,
   CopyButton,
   Group,
+  Modal,
   Paper,
   Stack,
   Table,
@@ -33,7 +34,15 @@ type Invitation = {
 export const PeoplePage = ({ role }: { role: "owner" | "admin" }) => {
   const queryClient = useQueryClient();
   const [email, setEmail] = useState("");
+  const [inviteOpen, setInviteOpen] = useState(false);
+  const [emailError, setEmailError] = useState("");
   const [lastUrl, setLastUrl] = useState("");
+  const closeInvite = () => {
+    setInviteOpen(false);
+    setEmail("");
+    setEmailError("");
+    invite.reset();
+  };
   const members = useQuery({
     queryKey: ["members"],
     queryFn: () => requestJson<{ members: Member[] }>("/admin/members"),
@@ -52,7 +61,7 @@ export const PeoplePage = ({ role }: { role: "owner" | "admin" }) => {
       }),
     onSuccess: ({ url }) => {
       setLastUrl(url);
-      setEmail("");
+      closeInvite();
       void queryClient.invalidateQueries({ queryKey: ["invitations"] });
     },
   });
@@ -71,23 +80,9 @@ export const PeoplePage = ({ role }: { role: "owner" | "admin" }) => {
         <Paper withBorder p="lg">
           <Stack>
             <Title order={3}>Invite an administrator</Title>
-            <Group align="end">
-              <TextInput
-                label="Email address"
-                type="email"
-                placeholder="admin@example.com"
-                value={email}
-                onChange={(event) => setEmail(event.currentTarget.value)}
-                style={{ flex: 1 }}
-              />
-              <Button
-                loading={invite.isPending}
-                onClick={() => invite.mutate()}
-              >
-                Send invitation
-              </Button>
-            </Group>
-            {invite.error && <Alert color="red">{invite.error.message}</Alert>}
+            <Button w="fit-content" onClick={() => setInviteOpen(true)}>
+              Send invitation
+            </Button>
             {lastUrl && (
               <Group>
                 <Text size="sm">Invitation sent.</Text>
@@ -102,6 +97,53 @@ export const PeoplePage = ({ role }: { role: "owner" | "admin" }) => {
             )}
           </Stack>
         </Paper>
+      )}
+      {role === "owner" && (
+        <Modal
+          opened={inviteOpen}
+          onClose={closeInvite}
+          title="Send invitation"
+          centered
+        >
+          <form
+            noValidate
+            onSubmit={(event) => {
+              event.preventDefault();
+              if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) {
+                setEmailError("Enter a valid email address.");
+                return;
+              }
+              setEmailError("");
+              invite.mutate();
+            }}
+          >
+            <Stack>
+              <TextInput
+                label="Email address"
+                type="email"
+                placeholder="admin@example.com"
+                value={email}
+                error={emailError}
+                onChange={(event) => {
+                  setEmail(event.currentTarget.value);
+                  setEmailError("");
+                }}
+                autoFocus
+              />
+              {invite.error && (
+                <Alert color="red">{invite.error.message}</Alert>
+              )}
+              <Group justify="flex-end">
+                <Button variant="subtle" onClick={closeInvite}>
+                  Cancel
+                </Button>
+                <Button type="submit" loading={invite.isPending}>
+                  Send invitation
+                </Button>
+              </Group>
+            </Stack>
+          </form>
+        </Modal>
       )}
       <Paper withBorder p="lg">
         <Stack>

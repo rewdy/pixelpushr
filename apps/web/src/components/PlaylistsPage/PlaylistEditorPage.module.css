@@ -4,3 +4,38 @@
   width: 100%;
   min-width: 0;
 }
+
+.draftRow {
+  display: grid;
+  grid-template-columns: auto auto minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: var(--mantine-spacing-sm);
+  min-width: 0;
+}
+
+.draftIdentity {
+  min-width: 0;
+}
+
+.draftTiming {
+  min-width: 0;
+}
+
+.draftActions {
+  flex-wrap: nowrap;
+}
+
+@media (max-width: 48em) {
+  .draftRow {
+    grid-template-columns: auto auto minmax(0, 1fr);
+    align-items: start;
+  }
+
+  .draftTiming {
+    grid-column: 2 / -1;
+  }
+
+  .draftActions {
+    grid-column: 2 / -1;
+  }
+}

@@ -33,14 +33,14 @@ export const emptyRecurrence = (): RecurrenceDraft => ({
 });
 
 const weekdayOptions = [
-  "Monday",
-  "Tuesday",
-  "Wednesday",
-  "Thursday",
-  "Friday",
-  "Saturday",
-  "Sunday",
-].map((label, index) => ({ value: String(index + 1), label }));
+  { value: "7", label: "Sunday" },
+  { value: "1", label: "Monday" },
+  { value: "2", label: "Tuesday" },
+  { value: "3", label: "Wednesday" },
+  { value: "4", label: "Thursday" },
+  { value: "5", label: "Friday" },
+  { value: "6", label: "Saturday" },
+];
 
 export const recurrencePayload = (
   draft: RecurrenceDraft,

@@ -30,6 +30,7 @@ let admin: ReturnType<typeof postgres>;
 let connection: ReturnType<typeof createDatabase>;
 let api: ChildProcess;
 let token: string;
+let administratorToken: string;
 
 const chooseCalendarDate = async (
   page: Page,
@@ -40,6 +41,9 @@ const chooseCalendarDate = async (
   const dropdownId = await control.getAttribute("aria-controls");
   if (!dropdownId) throw new Error("Date control has no popup reference");
   const dropdown = page.locator(`[data-dates-dropdown][id="${dropdownId}"]`);
+  await expect(dropdown.locator('th[class*="weekday"]').first()).toHaveText(
+    "Su",
+  );
   const [year, month, day] = date.split("-").map(Number);
   if (!year || !month || !day)
     throw new Error(`Invalid calendar date: ${date}`);
@@ -204,6 +208,7 @@ test("owner sets up the workspace and invites an administrator in the browser", 
   );
   expect(token).toBeTruthy();
   await page.goto("/people");
+  await page.getByRole("button", { name: "Send invitation" }).click();
   await page
     .getByRole("textbox", { name: "Email address" })
     .fill("browser-admin@example.com");
@@ -212,7 +217,10 @@ test("owner sets up the workspace and invites an administrator in the browser", 
       response.url().includes("/api/admin/invitations") &&
       response.request().method() === "POST",
   );
-  await page.getByRole("button", { name: "Send invitation" }).click();
+  await page
+    .getByRole("dialog", { name: "Send invitation" })
+    .getByRole("button", { name: "Send invitation" })
+    .click();
   const invitation = await inviteResponse;
   expect(invitation.status()).toBe(201);
   const inviteUrl = ((await invitation.json()) as { url: string }).url;
@@ -242,6 +250,10 @@ test("owner sets up the workspace and invites an administrator in the browser", 
   await expect(
     invited.getByRole("heading", { name: "Overview" }),
   ).toBeVisible();
+  administratorToken = await invited.evaluate(
+    () => sessionStorage.getItem("pixelpushr-admin-session") ?? "",
+  );
+  expect(administratorToken).toBeTruthy();
   await invitedContext.close();
   await page.reload();
   await expect(
@@ -414,8 +426,12 @@ test("upload media and publish an ordered playlist through the real API", async 
     .setInputFiles({ name: "brand.png", mimeType: "image/png", buffer: png });
   await expect(page.getByText("Media is ready for playlists.")).toBeVisible();
   await page.goto("/playlists");
-  await page.getByRole("textbox", { name: "New playlist" }).fill("Brand loop");
   await page.getByRole("button", { name: "Create playlist" }).click();
+  await page.getByRole("textbox", { name: "New playlist" }).fill("Brand loop");
+  await page
+    .getByRole("dialog", { name: "Create playlist" })
+    .getByRole("button", { name: "Create playlist" })
+    .click();
   await expect(page.getByRole("heading", { name: "Brand loop" })).toBeVisible();
   await page.getByRole("button", { name: "Add media" }).click();
   await page.getByRole("button", { name: "Add brand.png" }).click();
@@ -427,8 +443,12 @@ test("upload media and publish an ordered playlist through the real API", async 
     page.getByRole("textbox", { name: "Display seconds" }),
   ).toHaveValue("8");
   await page.goto("/displays");
-  await page.getByRole("textbox", { name: "Display name" }).fill("Lobby TV");
   await page.getByRole("button", { name: "Register display" }).click();
+  await page.getByRole("textbox", { name: "Display name" }).fill("Lobby TV");
+  await page
+    .getByRole("dialog", { name: "Register display" })
+    .getByRole("button", { name: "Register display" })
+    .click();
   await expect(page.getByText("Lobby TV")).toBeVisible();
   await page.getByRole("link", { name: "Assign playlists" }).click();
   await page.getByRole("button", { name: "Add playlist" }).click();
@@ -456,10 +476,14 @@ test("upload media and publish an ordered playlist through the real API", async 
   ).toBeGreaterThan(0);
   await player.close();
   await page.goto("/playlists");
+  await page.getByRole("button", { name: "Create playlist" }).click();
   await page
     .getByRole("textbox", { name: "New playlist" })
     .fill("Weekly campaign");
-  await page.getByRole("button", { name: "Create playlist" }).click();
+  await page
+    .getByRole("dialog", { name: "Create playlist" })
+    .getByRole("button", { name: "Create playlist" })
+    .click();
   await page.getByRole("button", { name: "Add media" }).click();
   await page.getByRole("button", { name: "Add brand.png" }).click();
   await page.getByRole("button", { name: "Save playlist" }).click();
@@ -491,8 +515,18 @@ test("upload media and publish an ordered playlist through the real API", async 
     .getByRole("textbox", { name: "Repeat every (weeks)" })
     .fill("3");
   await scheduledDrawer.locator(".mantine-MultiSelect-input").click();
+  await expect(page.getByRole("option").first()).toHaveText("Sunday");
+  await page.getByRole("option", { name: "Sunday" }).click();
   await page.getByRole("option", { name: "Monday" }).click();
+  const sundayRequest = page.waitForRequest(
+    (request) =>
+      request.method() === "POST" && request.url().includes("/schedules"),
+  );
   await scheduledDrawer.getByRole("button", { name: "Add playlist" }).click();
+  expect((await sundayRequest).postDataJSON()).toMatchObject({
+    recurrence: "weekly",
+    weekdays: [7, 1],
+  });
   await expect(scheduledDrawer).toBeHidden();
   await expect(page.getByText("Append", { exact: true })).toBeVisible();
   await chooseDateTime(
@@ -549,6 +583,140 @@ test("upload media and publish an ordered playlist through the real API", async 
   await expect(
     page.getByText("No playlists assigned. Add one to start playback."),
   ).toBeVisible();
+});
+
+test("listing links and creation dialogs preserve input and permissions", async ({
+  page,
+}) => {
+  await page.addInitScript(
+    (accessToken) =>
+      sessionStorage.setItem("pixelpushr-admin-session", accessToken),
+    token,
+  );
+  await page.goto("/playlists");
+  const playlistLink = page.getByRole("link", { name: "Brand loop" });
+  await playlistLink.focus();
+  await playlistLink.press("Enter");
+  await expect(page).toHaveURL(/\/playlists\/[a-f0-9-]+$/);
+  await page.goto("/playlists");
+  await page.getByRole("button", { name: "Create playlist" }).click();
+  const playlistDialog = page.getByRole("dialog", { name: "Create playlist" });
+  await playlistDialog
+    .getByRole("textbox", { name: "New playlist" })
+    .fill("Cancel me");
+  await playlistDialog.getByRole("button", { name: "Cancel" }).click();
+  await expect(playlistDialog).toBeHidden();
+  await page.getByRole("button", { name: "Create playlist" }).click();
+  await expect(
+    playlistDialog.getByRole("textbox", { name: "New playlist" }),
+  ).toBeEmpty();
+  await playlistDialog.getByRole("button", { name: "Create playlist" }).click();
+  await expect(
+    playlistDialog.getByText("Enter a playlist name."),
+  ).toBeVisible();
+  await playlistDialog
+    .getByRole("textbox", { name: "New playlist" })
+    .fill("Retry playlist");
+  await page.route(
+    "**/api/admin/playlists",
+    (route) =>
+      route.fulfill({
+        status: 500,
+        json: { error: { code: "internal", message: "Playlist unavailable" } },
+      }),
+    { times: 1 },
+  );
+  await playlistDialog.getByRole("button", { name: "Create playlist" }).click();
+  await expect(playlistDialog.getByText("Playlist unavailable")).toBeVisible();
+  await expect(
+    playlistDialog.getByRole("textbox", { name: "New playlist" }),
+  ).toHaveValue("Retry playlist");
+
+  await page.goto("/displays");
+  const displayLink = page.getByRole("link", { name: "Lobby TV", exact: true });
+  await displayLink.focus();
+  await displayLink.press("Enter");
+  await expect(page).toHaveURL(/\/displays\/[a-f0-9-]+$/);
+  await page.goto("/displays");
+  await page.getByRole("button", { name: "Register display" }).click();
+  const displayDialog = page.getByRole("dialog", { name: "Register display" });
+  await displayDialog
+    .getByRole("textbox", { name: "Display name" })
+    .fill("Cancel screen");
+  await displayDialog.getByRole("button", { name: "Cancel" }).click();
+  await expect(displayDialog).toBeHidden();
+  await page.getByRole("button", { name: "Register display" }).click();
+  await displayDialog.getByRole("button", { name: "Register display" }).click();
+  await expect(displayDialog.getByText("Enter a display name.")).toBeVisible();
+  await displayDialog
+    .getByRole("textbox", { name: "Display name" })
+    .fill("Retry display");
+  await page.route(
+    "**/api/admin/displays",
+    (route) =>
+      route.fulfill({
+        status: 500,
+        json: { error: { code: "internal", message: "Display unavailable" } },
+      }),
+    { times: 1 },
+  );
+  await displayDialog.getByRole("button", { name: "Register display" }).click();
+  await expect(displayDialog.getByText("Display unavailable")).toBeVisible();
+  await expect(
+    displayDialog.getByRole("textbox", { name: "Display name" }),
+  ).toHaveValue("Retry display");
+  await displayDialog.getByRole("button", { name: "Cancel" }).click();
+  await expect(displayDialog).toBeHidden();
+
+  await page.goto("/people");
+  await page.getByRole("button", { name: "Send invitation" }).click();
+  const inviteDialog = page.getByRole("dialog", { name: "Send invitation" });
+  await inviteDialog
+    .getByRole("textbox", { name: "Email address" })
+    .fill("cancel@example.com");
+  await inviteDialog.getByRole("button", { name: "Cancel" }).click();
+  await expect(inviteDialog).toBeHidden();
+  await page.getByRole("button", { name: "Send invitation" }).click();
+  await inviteDialog
+    .getByRole("textbox", { name: "Email address" })
+    .fill("invalid");
+  await inviteDialog.getByRole("button", { name: "Send invitation" }).click();
+  await expect(
+    inviteDialog.getByText("Enter a valid email address."),
+  ).toBeVisible();
+  await inviteDialog
+    .getByRole("textbox", { name: "Email address" })
+    .fill("retry@example.com");
+  await page.route(
+    "**/api/admin/invitations",
+    (route) =>
+      route.fulfill({
+        status: 500,
+        json: {
+          error: { code: "internal", message: "Invitation unavailable" },
+        },
+      }),
+    { times: 1 },
+  );
+  await inviteDialog.getByRole("button", { name: "Send invitation" }).click();
+  await expect(inviteDialog.getByText("Invitation unavailable")).toBeVisible();
+  await expect(
+    inviteDialog.getByRole("textbox", { name: "Email address" }),
+  ).toHaveValue("retry@example.com");
+  await inviteDialog.getByRole("button", { name: "Send invitation" }).click();
+  await expect(inviteDialog).toBeHidden();
+  await expect(page.getByText("Invitation sent.")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Copy link" })).toBeVisible();
+
+  await page.evaluate(
+    (accessToken) =>
+      sessionStorage.setItem("pixelpushr-admin-session", accessToken),
+    administratorToken,
+  );
+  await page.goto("/people");
+  await expect(
+    page.getByRole("button", { name: "Send invitation" }),
+  ).toHaveCount(0);
 });
 
 test("recurring Override creation and settings edits use the shared schedule controls", async ({
@@ -802,13 +970,28 @@ test("visual picker and bulk draft edits preserve duplicate items and save bound
     token,
   );
   await page.goto("/playlists");
+  await page.getByRole("button", { name: "Create playlist" }).click();
   await page
     .getByRole("textbox", { name: "New playlist" })
     .fill("Bulk editor test");
-  await page.getByRole("button", { name: "Create playlist" }).click();
+  await page
+    .getByRole("dialog", { name: "Create playlist" })
+    .getByRole("button", { name: "Create playlist" })
+    .click();
   await expect(
     page.getByRole("heading", { name: "Bulk editor test" }),
   ).toBeVisible();
+  const bulkPanel = page.getByTestId("playlist-bulk-panel");
+  await expect(bulkPanel).toBeVisible();
+  await expect(
+    bulkPanel.getByRole("button", { name: "Select all", exact: true }),
+  ).toBeDisabled();
+  await expect(
+    bulkPanel.getByRole("button", { name: "Apply duration" }),
+  ).toBeDisabled();
+  await expect(
+    bulkPanel.getByRole("button", { name: "Delete selected" }),
+  ).toBeDisabled();
   await page.getByRole("button", { name: "Add media" }).click();
   const filter = page.getByRole("textbox", { name: "Search ready media" });
   await filter.fill("poster-video");
@@ -843,6 +1026,27 @@ test("visual picker and bulk draft edits preserve duplicate items and save bound
   await expect(page.getByRole("checkbox", { name: /Select item/ })).toHaveCount(
     4,
   );
+  const firstRowTop = (
+    await page.getByRole("checkbox", { name: "Select item 1" }).boundingBox()
+  )?.y;
+  await bulkPanel
+    .getByRole("button", { name: "Select all", exact: true })
+    .click();
+  await expect(
+    bulkPanel.getByText("4 selected", { exact: false }),
+  ).toBeVisible();
+  for (const position of [1, 2, 3, 4])
+    await expect(
+      page.getByRole("checkbox", { name: `Select item ${position}` }),
+    ).toBeChecked();
+  expect(
+    (await page.getByRole("checkbox", { name: "Select item 1" }).boundingBox())
+      ?.y,
+  ).toBe(firstRowTop);
+  await bulkPanel.getByRole("button", { name: "Deselect all" }).click();
+  await expect(
+    bulkPanel.getByText("0 selected", { exact: false }),
+  ).toBeVisible();
   await expect(
     page.getByLabel("Video thumbnail unavailable").first(),
   ).toBeVisible();
@@ -870,9 +1074,9 @@ test("visual picker and bulk draft edits preserve duplicate items and save bound
     page.getByRole("textbox", { name: "Repeat seconds" }),
   ).toHaveValue("12");
   await page.getByRole("button", { name: "Deselect all" }).click();
-  await expect(page.getByRole("button", { name: "Deselect all" })).toHaveCount(
-    0,
-  );
+  await expect(
+    page.getByRole("button", { name: "Deselect all" }),
+  ).toBeDisabled();
   for (const position of [1, 2, 3, 4])
     await expect(
       page.getByRole("checkbox", { name: `Select item ${position}` }),
@@ -914,6 +1118,50 @@ test("visual picker and bulk draft edits preserve duplicate items and save bound
   await expect(
     page.getByRole("textbox", { name: "Search ready media" }),
   ).toBeVisible();
+  const workspaceAsset = await connection.db.query.mediaAssets.findFirst();
+  if (!workspaceAsset) throw new Error("Missing workspace media");
+  const longName = `Long draft media ${"name ".repeat(28)}`;
+  await connection.db.insert(mediaAssets).values({
+    organizationId: workspaceAsset.organizationId,
+    name: longName,
+    kind: "image",
+    status: "ready",
+    mimeType: "image/png",
+    objectKey: `${workspaceAsset.organizationId}/${crypto.randomUUID()}`,
+    sizeBytes: 10,
+  });
+  await page.setViewportSize({ width: 390, height: 800 });
+  await page.reload();
+  await page.getByRole("button", { name: "Add media" }).click();
+  await page
+    .getByRole("textbox", { name: "Search ready media" })
+    .fill("Long draft media");
+  await page.getByRole("button", { name: `Add ${longName}` }).click();
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("dialog", { name: "Ready media" })).toBeHidden();
+  await expect(page.getByText(longName, { exact: true }).first()).toBeVisible();
+  await expect(
+    page.getByRole("textbox", { name: "Display seconds" }).last(),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Remove item 5" }),
+  ).toBeVisible();
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= window.innerWidth,
+    ),
+  ).toBe(true);
+  await page.getByRole("button", { name: "Move item 5 up" }).click();
+  await expect(
+    page
+      .getByRole("button", { name: "Remove item 4" })
+      .locator("..")
+      .locator(".."),
+  ).toContainText(longName);
+  await page.getByRole("button", { name: "Remove item 4" }).click();
+  await expect(page.getByRole("checkbox", { name: /Select item/ })).toHaveCount(
+    4,
+  );
 });
 
 test("draft preview loops images and videos without publishing", async ({
@@ -925,10 +1173,14 @@ test("draft preview loops images and videos without publishing", async ({
     token,
   );
   await page.goto("/playlists");
+  await page.getByRole("button", { name: "Create playlist" }).click();
   await page
     .getByRole("textbox", { name: "New playlist" })
     .fill("Preview test");
-  await page.getByRole("button", { name: "Create playlist" }).click();
+  await page
+    .getByRole("dialog", { name: "Create playlist" })
+    .getByRole("button", { name: "Create playlist" })
+    .click();
   await page.getByRole("button", { name: "Show preview" }).click();
   await expect(page.getByText("No items in this preview")).toBeVisible();
   await page.getByRole("button", { name: "Add media" }).click();
@@ -979,10 +1231,14 @@ test("draft preview repeats video until its configured duration", async ({
     token,
   );
   await page.goto("/playlists");
+  await page.getByRole("button", { name: "Create playlist" }).click();
   await page
     .getByRole("textbox", { name: "New playlist" })
     .fill("Repeat preview test");
-  await page.getByRole("button", { name: "Create playlist" }).click();
+  await page
+    .getByRole("dialog", { name: "Create playlist" })
+    .getByRole("button", { name: "Create playlist" })
+    .click();
   await page.getByRole("button", { name: "Add media" }).click();
   await page.getByRole("button", { name: "Add poster-video.mp4" }).click();
   await page.getByRole("button", { name: "Add brand.png" }).click();
@@ -1467,10 +1723,14 @@ test("top-level pages keep filters, selection, and ordered editors in scope", as
   ).toBeVisible();
   await page.reload();
   await expect(page).toHaveURL(/page=2/);
+  await page.getByRole("button", { name: "Create playlist" }).click();
   await page
     .getByRole("textbox", { name: "New playlist" })
     .fill("Paging new playlist");
-  await page.getByRole("button", { name: "Create playlist" }).click();
+  await page
+    .getByRole("dialog", { name: "Create playlist" })
+    .getByRole("button", { name: "Create playlist" })
+    .click();
   await expect(page).toHaveURL(/\/playlists\/[a-f0-9-]+$/);
   await page.goto("/playlists?page=999");
   await expect(page).not.toHaveURL(/page=999/);
@@ -1493,10 +1753,14 @@ test("top-level pages keep filters, selection, and ordered editors in scope", as
   ).toBeVisible();
   await page.reload();
   await expect(page).toHaveURL(/page=2/);
+  await page.getByRole("button", { name: "Register display" }).click();
   await page
     .getByRole("textbox", { name: "Display name" })
     .fill("Paging added display");
-  await page.getByRole("button", { name: "Register display" }).click();
+  await page
+    .getByRole("dialog", { name: "Register display" })
+    .getByRole("button", { name: "Register display" })
+    .click();
   await expect(page.getByText(/Showing .* of .* results/)).toBeVisible();
   await page.goto("/displays?page=999");
   await expect(page).not.toHaveURL(/page=999/);

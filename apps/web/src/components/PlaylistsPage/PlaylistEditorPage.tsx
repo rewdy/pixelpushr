@@ -327,61 +327,74 @@ export const PlaylistEditorPage = () => {
                 </Button>
               </Group>
             </Group>
-            {selected.size > 0 && (
-              <Paper withBorder p="sm">
-                <Stack gap="sm">
-                  <Group justify="space-between" gap="xs">
-                    <Text size="sm">
-                      {selected.size} selected · {eligible} can receive a
-                      duration
-                    </Text>
+            <Paper withBorder p="sm" data-testid="playlist-bulk-panel">
+              <Stack gap="sm">
+                <Group justify="space-between" gap="xs">
+                  <Text size="sm">
+                    {selected.size} selected · {eligible} can receive a duration
+                  </Text>
+                  <Group gap="xs">
                     <Button
                       size="xs"
                       variant="subtle"
+                      disabled={!draft.length || selected.size === draft.length}
+                      onClick={() =>
+                        setSelected(new Set(draft.map((item) => item.clientId)))
+                      }
+                    >
+                      Select all
+                    </Button>
+                    <Button
+                      size="xs"
+                      variant="subtle"
+                      disabled={!selected.size}
                       onClick={() => setSelected(new Set())}
                     >
                       Deselect all
                     </Button>
                   </Group>
-                  <Group align="end">
-                    <NumberInput
-                      label="Bulk duration (seconds)"
-                      min={1}
-                      max={86400}
-                      value={bulkSeconds}
-                      onChange={setBulkSeconds}
-                    />
-                    <Button
-                      variant="light"
-                      disabled={!eligible || !validBulkSeconds}
-                      onClick={() => {
-                        changeDraft((items) =>
-                          applyBulkDuration(
-                            items,
-                            selected,
-                            assetMap,
-                            Number(bulkSeconds),
-                          ),
-                        );
-                        setBulkMessage(
-                          `${eligible} item${eligible === 1 ? "" : "s"} updated.`,
-                        );
-                      }}
-                    >
-                      Apply duration
-                    </Button>
-                    <Button
-                      color="red"
-                      variant="light"
-                      leftSection={<LuTrash2 size={16} />}
-                      onClick={() => remove(selected)}
-                    >
-                      Delete selected
-                    </Button>
-                  </Group>
-                </Stack>
-              </Paper>
-            )}
+                </Group>
+                <Group align="end">
+                  <NumberInput
+                    label="Bulk duration (seconds)"
+                    min={1}
+                    max={86400}
+                    value={bulkSeconds}
+                    onChange={setBulkSeconds}
+                    w={150}
+                    disabled={!selected.size}
+                  />
+                  <Button
+                    variant="light"
+                    disabled={!eligible || !validBulkSeconds}
+                    onClick={() => {
+                      changeDraft((items) =>
+                        applyBulkDuration(
+                          items,
+                          selected,
+                          assetMap,
+                          Number(bulkSeconds),
+                        ),
+                      );
+                      setBulkMessage(
+                        `${eligible} item${eligible === 1 ? "" : "s"} updated.`,
+                      );
+                    }}
+                  >
+                    Apply duration
+                  </Button>
+                  <Button
+                    color="red"
+                    variant="light"
+                    leftSection={<LuTrash2 size={16} />}
+                    disabled={!selected.size}
+                    onClick={() => remove(selected)}
+                  >
+                    Delete selected
+                  </Button>
+                </Group>
+              </Stack>
+            </Paper>
             {bulkMessage && <Alert color="signal">{bulkMessage}</Alert>}
             {draft.map((item, position) => {
               const asset =
@@ -391,7 +404,7 @@ export const PlaylistEditorPage = () => {
                 )?.asset;
               return (
                 <Paper key={item.clientId} withBorder p="md">
-                  <Group justify="space-between" align="start" wrap="nowrap">
+                  <div className={classes.draftRow}>
                     <Checkbox
                       aria-label={`Select item ${position + 1}`}
                       checked={selected.has(item.clientId)}
@@ -408,18 +421,25 @@ export const PlaylistEditorPage = () => {
                     {asset && (
                       <MediaThumbnail asset={asset} width={64} height={48} />
                     )}
-                    <Stack gap="xs" style={{ flex: 1, minWidth: 0 }}>
+                    <Stack gap="xs" className={classes.draftIdentity}>
                       <Group gap="xs">
                         <Badge variant="light" color="gray">
                           {position + 1}
                         </Badge>
-                        <Text fw={600} truncate>
+                        <Text
+                          fw={600}
+                          truncate
+                          title={asset?.name ?? "Unavailable asset"}
+                        >
                           {asset?.name ?? "Unavailable asset"}
                         </Text>
                       </Group>
+                    </Stack>
+                    <Box className={classes.draftTiming}>
                       {asset?.kind === "image" ? (
                         <NumberInput
                           label="Display seconds"
+                          w={130}
                           min={1}
                           max={86400}
                           value={(item.imageDurationMs ?? 8000) / 1000}
@@ -430,7 +450,7 @@ export const PlaylistEditorPage = () => {
                           }
                         />
                       ) : (
-                        <Group align="end">
+                        <Group align="end" wrap="wrap" gap="xs">
                           <Select
                             label="Video playback"
                             data={[
@@ -438,6 +458,7 @@ export const PlaylistEditorPage = () => {
                               { value: "repeat", label: "Repeat for duration" },
                             ]}
                             value={item.videoMode ?? "once"}
+                            w={190}
                             onChange={(value) =>
                               update(item.clientId, {
                                 videoMode:
@@ -452,6 +473,7 @@ export const PlaylistEditorPage = () => {
                           {item.videoMode === "repeat" && (
                             <NumberInput
                               label="Repeat seconds"
+                              w={130}
                               min={1}
                               max={86400}
                               value={(item.repeatDurationMs ?? 30000) / 1000}
@@ -464,8 +486,8 @@ export const PlaylistEditorPage = () => {
                           )}
                         </Group>
                       )}
-                    </Stack>
-                    <Stack gap="xs">
+                    </Box>
+                    <Group gap="xs" className={classes.draftActions}>
                       <ActionIcon
                         variant="subtle"
                         color="gray"
@@ -492,8 +514,8 @@ export const PlaylistEditorPage = () => {
                       >
                         <LuTrash2 size={16} />
                       </ActionIcon>
-                    </Stack>
-                  </Group>
+                    </Group>
+                  </div>
                 </Paper>
               );
             })}
