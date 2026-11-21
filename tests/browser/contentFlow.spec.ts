@@ -708,14 +708,19 @@ test("listing links and creation dialogs preserve input and permissions", async 
   await expect(page.getByText("Invitation sent.")).toBeVisible();
   await expect(page.getByRole("button", { name: "Copy link" })).toBeVisible();
 
-  await page.evaluate(
+  // A separate page avoids rerunning the owner's page-level init script.
+  const administratorPage = await page.context().newPage();
+  await administratorPage.addInitScript(
     (accessToken) =>
       sessionStorage.setItem("pixelpushr-admin-session", accessToken),
     administratorToken,
   );
-  await page.goto("/people");
+  await administratorPage.goto("/people");
   await expect(
-    page.getByRole("button", { name: "Send invitation" }),
+    administratorPage.getByRole("heading", { name: "People & access" }),
+  ).toBeVisible();
+  await expect(
+    administratorPage.getByRole("button", { name: "Send invitation" }),
   ).toHaveCount(0);
 });
 
