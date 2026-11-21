@@ -32,6 +32,6 @@ bun run test:browser
 
 ## Operations and AWS deployment
 
-See [docs/operations.md](docs/operations.md) for the browser-window MVP walkthrough, schedule and override behavior, media management and cleanup, caching limits, and the Terraform deployment sequence. Terraform lives in `tf/` and uses the reusable `tf/modules/platform/` module with region and environment inputs. Deployed API settings, including the RDS connection, S3 bucket, media URL, Cognito pool, and site URL, are supplied by the module's Lambda environment; the test-only local defaults are never used for deployment. No AWS infrastructure is created by the local development commands.
+See [docs/operations.md](docs/operations.md) for the browser-window MVP walkthrough, playback and media behavior, and the GitHub Actions and manual deployment steps. Production settings for `pixelpushr.app` are committed in [tf/main.tf](tf/main.tf) and passed to the reusable `tf/modules/platform/` module. The module configures Lambda with the RDS connection, S3 bucket, media URL, Cognito pool, and site URL. Local development uses Docker services.
 
 For contributors: [architecture and product decisions](docs/architecture.md), [approved UI direction](docs/design-system.md), and [TypeScript conventions](docs/conventions.md). The latest archived [UI navigation and previews change](openspec/changes/archive/2026-09-29-refine-ui-navigation-and-previews/tasks.md) records the completed refinement; the active [platform change](openspec/changes/build-digital-signage-platform/tasks.md) still tracks live AWS verification.

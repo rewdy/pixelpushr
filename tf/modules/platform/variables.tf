@@ -4,5 +4,6 @@ variable "domain_name" { type = string }
 variable "route53_zone_id" { type = string }
 variable "cloudfront_certificate_arn" { type = string }
 variable "mail_from" { type = string }
+variable "initial_owner_email" { type = string }
 variable "lambda_zip_path" { type = string }
 variable "vpc_cidr" { type = string }

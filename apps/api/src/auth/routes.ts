@@ -15,6 +15,7 @@ export type AppDependencies = {
   auth: AuthProvider;
   mailer: InvitationMailer;
   publicWebUrl: string;
+  initialOwnerEmail?: string;
   storage?: MediaStorage;
   maxImageBytes?: number;
   maxVideoBytes?: number;
@@ -42,16 +43,17 @@ const hashToken = async (token: string) =>
 const bearerIdentity = async (
   header: string | undefined,
   auth: AuthProvider,
+  requireVerifiedEmail = false,
 ): Promise<Identity> => {
   if (!header?.startsWith("Bearer "))
     throw new ApiError(401, "unauthorized", "Administrator session required");
-  return auth.verify(header.slice(7));
+  return auth.verify(header.slice(7), { requireVerifiedEmail });
 };
 
 /** Registers first-run, session, and administrator protection endpoints. */
 export const registerAuthRoutes = (
   app: Hono,
-  { db, auth, mailer, publicWebUrl }: AppDependencies,
+  { db, auth, mailer, publicWebUrl, initialOwnerEmail }: AppDependencies,
 ) => {
   app.use("/admin/*", async (context, next) => {
     const identity = await bearerIdentity(
@@ -120,6 +122,7 @@ export const registerAuthRoutes = (
     const identity = await bearerIdentity(
       context.req.header("authorization"),
       auth,
+      Boolean(initialOwnerEmail),
     );
     const body = await parseJsonBody(context, setupSchema);
     try {
@@ -143,6 +146,15 @@ export const registerAuthRoutes = (
           409,
           "conflict",
           "Organization setup is already complete",
+        );
+      if (
+        initialOwnerEmail &&
+        identity.email.toLowerCase() !== initialOwnerEmail
+      )
+        throw new ApiError(
+          403,
+          "forbidden",
+          "Workspace setup requires the designated owner's verified email",
         );
       const user = await transaction.query.users.findFirst({
         where: eq(users.subject, identity.subject),

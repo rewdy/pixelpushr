@@ -4,7 +4,7 @@ The [OpenSpec change](../openspec/changes/build-digital-signage-platform/design.
 
 ## Scope
 
-Pixelpushr is a single-organization, multi-admin, multi-display signage platform. The first account claims the organization and becomes its owner; later administrators join by invitation. Admin endpoints require a session. A display player is a public URL with a random display token and needs no login. Do not use the MVP for sensitive or private media. Multi-tenancy, player access controls, real-time push, device synchronization, and transcoding are not included.
+Pixelpushr is a single-organization, multi-admin, multi-display signage platform. In production, the account with the configured, Cognito-verified email can create the organization and become its owner. Later administrators join by invitation. Admin endpoints require a session. A display player is a public URL with a random display token and needs no login. Do not use the MVP for sensitive or private media. Multi-tenancy, player access controls, real-time push, device synchronization, and transcoding are not included.
 
 The three playback milestones are deliberately separate: (1) assign one or more always-on playlists; (2) add one or more scheduled playlists to the same cycling queue; (3) let an active override playlist play _alone_, interrupting the current item at its exact start and end. See [operations.md](operations.md#scheduling-and-override-semantics) for configuration and boundary details.
 

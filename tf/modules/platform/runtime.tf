@@ -68,14 +68,15 @@ locals {
   lambda_environment = {
     APP_ENV              = "production"
     AUTH_MODE            = "cognito"
-    AWS_REGION           = var.region
     DATABASE_HOST        = aws_db_instance.main.address
     DATABASE_NAME        = aws_db_instance.main.db_name
     DATABASE_SECRET_ARN  = aws_db_instance.main.master_user_secret[0].secret_arn
+    NODE_EXTRA_CA_CERTS  = "/var/task/rds-ca.pem"
     COGNITO_USER_POOL_ID = aws_cognito_user_pool.admin.id
     COGNITO_CLIENT_ID    = aws_cognito_user_pool_client.web.id
     PUBLIC_WEB_URL       = "https://${var.domain_name}"
     MAIL_FROM            = var.mail_from
+    INITIAL_OWNER_EMAIL  = var.initial_owner_email
     MEDIA_STORAGE        = "s3"
     MEDIA_BUCKET         = aws_s3_bucket.media.bucket
     MEDIA_PUBLIC_URL     = "https://${var.domain_name}/media"

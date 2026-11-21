@@ -28,7 +28,8 @@ export const databaseUrlFromEnvironment = async (
   const url = new URL(
     `postgres://${DATABASE_HOST}:${credentials.port ?? 5432}/${DATABASE_NAME}`,
   );
-  url.username = credentials.username;
-  url.password = credentials.password;
+  url.username = encodeURIComponent(credentials.username);
+  url.password = encodeURIComponent(credentials.password);
+  url.searchParams.set("sslmode", "verify-full");
   return url.toString();
 };

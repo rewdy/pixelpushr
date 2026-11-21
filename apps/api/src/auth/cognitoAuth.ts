@@ -1,6 +1,7 @@
 import {
   CognitoIdentityProviderClient,
   ConfirmSignUpCommand,
+  GetUserCommand,
   InitiateAuthCommand,
   SignUpCommand,
 } from "@aws-sdk/client-cognito-identity-provider";
@@ -83,7 +84,7 @@ export const createCognitoAuth = (
         throw new ApiError(401, "unauthorized", "Invalid email or password");
       }
     },
-    verify: async (token) => {
+    verify: async (token, options) => {
       try {
         const { payload } = await jwtVerify(token, keys, { issuer });
         if (
@@ -92,7 +93,19 @@ export const createCognitoAuth = (
           !payload.sub
         )
           throw new Error("Unexpected token claims");
-        return { subject: payload.sub, email: "" };
+        if (!options?.requireVerifiedEmail)
+          return { subject: payload.sub, email: "" };
+        const { UserAttributes } = await client.send(
+          new GetUserCommand({ AccessToken: token }),
+        );
+        const attributes = new Map(
+          UserAttributes?.map(({ Name, Value }) => [Name, Value]),
+        );
+        const email =
+          attributes.get("email_verified") === "true"
+            ? (attributes.get("email") ?? "")
+            : "";
+        return { subject: payload.sub, email };
       } catch {
         throw new ApiError(401, "unauthorized", "Invalid or expired session");
       }

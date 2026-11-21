@@ -59,6 +59,7 @@ export const createRuntime = (
       auth,
       mailer,
       publicWebUrl: config.PUBLIC_WEB_URL,
+      initialOwnerEmail: config.INITIAL_OWNER_EMAIL,
       storage,
       maxImageBytes: config.MAX_IMAGE_MB * 1024 * 1024,
       maxVideoBytes: config.MAX_VIDEO_MB * 1024 * 1024,

@@ -1,0 +1,127 @@
+name: CI and deploy
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Checks and tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.15.8
+          terraform_wrapper: false
+      - run: bun install --frozen-lockfile
+      - run: bun run check
+      - run: bun run typecheck
+      - run: bun run build
+      - run: bun run test:unit
+      - name: Package and validate Terraform
+        run: |
+          bash scripts/package-lambda.sh
+          terraform -chdir=tf fmt -check -recursive
+          terraform -chdir=tf init -backend=false -input=false -lockfile=readonly
+          terraform -chdir=tf validate
+      - run: bunx playwright install --with-deps chromium
+      - run: docker compose up -d --wait
+      - run: bun run --filter '@pixelpushr/api' storage:init
+      - run: bun run test:integration
+      - run: bun run test:browser --workers=1
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release
+          path: |
+            artifacts/lambda.zip
+            apps/web/dist/
+          if-no-files-found: error
+          retention-days: 1
+
+  plan:
+    name: Terraform plan
+    if: >-
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: release
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.15.8
+          terraform_wrapper: false
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::390847857761:role/pixelpushr-github-plan
+          aws-region: us-east-1
+      - run: terraform -chdir=tf init -input=false -lockfile=readonly
+      - run: terraform -chdir=tf plan -input=false -lock-timeout=5m -no-color
+
+  deploy:
+    name: Deploy production
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    environment: production
+    concurrency:
+      group: pixelpushr-production
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: release
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.15.8
+          terraform_wrapper: false
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::390847857761:role/pixelpushr-github-deploy
+          aws-region: us-east-1
+      - run: terraform -chdir=tf init -input=false -lockfile=readonly
+      - run: terraform -chdir=tf plan -input=false -lock-timeout=5m -out=release.tfplan
+      - run: terraform -chdir=tf apply -input=false -lock-timeout=5m release.tfplan
+      - name: Migrate the database
+        run: |
+          migration_function="$(terraform -chdir=tf output -raw migration_lambda_name)"
+          aws lambda invoke --cli-read-timeout 130 --function-name "$migration_function" "$RUNNER_TEMP/migration.json" \
+            > "$RUNNER_TEMP/migration-status.json"
+          jq -e '.StatusCode == 200 and (has("FunctionError") | not)' "$RUNNER_TEMP/migration-status.json"
+          jq -e '.migrated == true' "$RUNNER_TEMP/migration.json"
+      - name: Publish the web application
+        run: |
+          web_bucket="$(terraform -chdir=tf output -raw web_bucket)"
+          distribution_id="$(terraform -chdir=tf output -raw cloudfront_distribution_id)"
+          aws s3 sync apps/web/dist "s3://$web_bucket" --exclude index.html
+          aws s3 cp apps/web/dist/index.html "s3://$web_bucket/index.html"
+          invalidation_id="$(aws cloudfront create-invalidation --distribution-id "$distribution_id" \
+            --paths /index.html / --query 'Invalidation.Id' --output text)"
+          aws cloudfront wait invalidation-completed --distribution-id "$distribution_id" --id "$invalidation_id"
+      - name: Smoke test the deployed site
+        run: |
+          curl --fail --silent --show-error --retry 5 --retry-all-errors \
+            "$(terraform -chdir=tf output -raw api_health_url)"
+          curl --fail --silent --show-error --retry 5 --retry-all-errors \
+            "$(terraform -chdir=tf output -raw web_url)" --output /dev/null

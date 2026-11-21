@@ -5,6 +5,7 @@ const schema = z
     APP_ENV: z.enum(["local", "production"]).default("local"),
     AUTH_MODE: z.enum(["local", "cognito"]).default("local"),
     DATABASE_URL: z.url(),
+    INITIAL_OWNER_EMAIL: z.email().toLowerCase().optional(),
     LOCAL_AUTH_SECRET: z.string().min(32).optional(),
     AWS_REGION: z.string().optional(),
     COGNITO_USER_POOL_ID: z.string().optional(),
@@ -24,6 +25,12 @@ const schema = z
     PORT: z.coerce.number().int().min(1).max(65535).default(3000),
   })
   .superRefine((value, context) => {
+    if (value.APP_ENV === "production" && !value.INITIAL_OWNER_EMAIL)
+      context.addIssue({
+        code: "custom",
+        path: ["INITIAL_OWNER_EMAIL"],
+        message: "Production requires an initial owner email",
+      });
     if (value.APP_ENV === "production" && value.AUTH_MODE !== "cognito")
       context.addIssue({
         code: "custom",

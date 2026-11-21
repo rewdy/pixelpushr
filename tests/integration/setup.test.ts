@@ -58,6 +58,7 @@ describe("first-run organization setup", () => {
         },
       },
       publicWebUrl: "http://127.0.0.1:5173",
+      initialOwnerEmail: "owner@example.com",
       storage: mediaStorage,
     });
   });
@@ -71,7 +72,35 @@ describe("first-run organization setup", () => {
     }
   });
 
-  test("first authenticated user becomes owner and second setup is rejected", async () => {
+  test("another authenticated account cannot claim an empty workspace", async () => {
+    const credentials = {
+      email: "other@example.com",
+      password: "super-long-password",
+    };
+    const request = {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(credentials),
+    };
+    expect((await app.request("/auth/register", request)).status).toBe(201);
+    const login = await app.request("/auth/login", request);
+    expect(login.status).toBe(200);
+    const { accessToken } = (await login.json()) as { accessToken: string };
+    const setup = await app.request("/setup", {
+      method: "POST",
+      headers: {
+        ...request.headers,
+        authorization: `Bearer ${accessToken}`,
+      },
+      body: JSON.stringify({ name: "Other", timezone: "America/Chicago" }),
+    });
+    expect(setup.status).toBe(403);
+    expect(await (await app.request("/setup/status")).json()).toEqual({
+      setupRequired: true,
+    });
+  });
+
+  test("designated account becomes owner and second setup is rejected", async () => {
     const status = await app.request("/setup/status");
     expect(await status.json()).toEqual({ setupRequired: true });
     const registered = await app.request("/auth/register", {
