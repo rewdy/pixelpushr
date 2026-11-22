@@ -18,7 +18,10 @@ import {
   type QueueState,
   receiveManifest,
 } from "../../helpers/playerQueue";
-import { transitionDelayMs } from "../../helpers/transitionTimer";
+import {
+  schedulePlaybackDeadline,
+  transitionDelayMs,
+} from "../../helpers/transitionTimer";
 import { PlayerMediaLayer } from "./PlayerMediaLayer";
 import classes from "./PlayerPage.module.css";
 
@@ -57,7 +60,7 @@ export const PlayerPage = () => {
   const stateRef = useRef<QueueState | null>(null);
   const videoAdvanced = useRef(false);
   const videoFallbackTimer = useRef<number | null>(null);
-  const videoFadeTimer = useRef<number | null>(null);
+  const cancelVideoFade = useRef<(() => void) | null>(null);
   const boundary = useRef<{ key: string; at: number } | null>(null);
   const failedUrls = useRef(new Set<string>());
   const clockOffsetMs = useRef(0);
@@ -167,9 +170,8 @@ export const PlayerPage = () => {
       if (videoFallbackTimer.current !== null)
         window.clearTimeout(videoFallbackTimer.current);
       videoFallbackTimer.current = null;
-      if (videoFadeTimer.current !== null)
-        window.clearTimeout(videoFadeTimer.current);
-      videoFadeTimer.current = null;
+      cancelVideoFade.current?.();
+      cancelVideoFade.current = null;
       boundary.current = null;
     };
   }, [itemKey]);
@@ -292,17 +294,14 @@ export const PlayerPage = () => {
         : performance.now() + timedDurationMs;
     boundary.current = { key: itemKey, at };
     const remaining = Math.max(0, at - performance.now());
-    const fadeTimer =
+    const cancelFade =
       overlapStartMs !== null
-        ? window.setTimeout(
-            tryStartFade,
-            Math.max(0, remaining - playerCrossfadeMs),
-          )
+        ? schedulePlaybackDeadline(at - playerCrossfadeMs, tryStartFade)
         : null;
     const timer = window.setTimeout(() => advance(itemKey), remaining);
     return () => {
       window.clearTimeout(timer);
-      if (fadeTimer !== null) window.clearTimeout(fadeTimer);
+      cancelFade?.();
     };
   }, [itemKey, timedDurationMs, overlapStartMs, advance, tryStartFade]);
 
@@ -343,14 +342,13 @@ export const PlayerPage = () => {
       return;
     if (videoFallbackTimer.current !== null)
       window.clearTimeout(videoFallbackTimer.current);
-    if (videoFadeTimer.current !== null)
-      window.clearTimeout(videoFadeTimer.current);
+    cancelVideoFade.current?.();
     const remaining = (video.duration - video.currentTime) * 1000;
-    if (itemKey)
-      boundary.current = { key: itemKey, at: performance.now() + remaining };
-    videoFadeTimer.current = window.setTimeout(
+    const at = performance.now() + remaining;
+    if (itemKey) boundary.current = { key: itemKey, at };
+    cancelVideoFade.current = schedulePlaybackDeadline(
+      at - playerCrossfadeMs,
       tryStartFade,
-      Math.max(0, remaining - playerCrossfadeMs),
     );
     videoFallbackTimer.current = window.setTimeout(
       finishVideoOnce,

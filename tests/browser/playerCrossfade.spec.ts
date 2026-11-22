@@ -73,6 +73,27 @@ const partialFade = async (page: Page, outgoing: string, incoming: string) => {
 test("images overlap for 500 ms without extending the outgoing item", async ({
   page,
 }) => {
+  await page.addInitScript(() => {
+    const setTimeout = window.setTimeout.bind(window);
+    window.setTimeout = (callback, delay, ...args) => {
+      if (
+        typeof callback !== "function" ||
+        !delay ||
+        delay < 1050 ||
+        delay > 1110
+      )
+        return setTimeout(callback, delay, ...args);
+      // Wake the 1,100 ms fade timer before its window opens.
+      return setTimeout(
+        (...callbackArgs) => {
+          document.documentElement.dataset.fadeTimerWokeEarly = "true";
+          callback(...callbackArgs);
+        },
+        delay - 125,
+        ...args,
+      );
+    };
+  });
   await routeImages(page, ["fade-a", "fade-b"]);
   await page.route("**/api/player/image-fade/manifest", (route) =>
     route.fulfill({
@@ -88,6 +109,10 @@ test("images overlap for 500 ms without extending the outgoing item", async ({
     page.locator('[data-player-layer="current"][data-player-item="fade-a"]'),
   ).toBeVisible();
   await partialFade(page, "fade-a", "fade-b");
+  await expect(page.locator("html")).toHaveAttribute(
+    "data-fade-timer-woke-early",
+    "true",
+  );
   expect(await page.locator("[data-player-layer]").count()).toBe(2);
   await expect(
     page.locator('[data-player-layer="current"][data-player-item="fade-b"]'),
