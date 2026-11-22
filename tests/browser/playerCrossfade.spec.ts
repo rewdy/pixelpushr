@@ -34,32 +34,40 @@ const routeImages = async (page: Page, ids: string[]) => {
 };
 
 const partialFade = async (page: Page, outgoing: string, incoming: string) => {
-  await expect
-    .poll(
-      () =>
-        page.evaluate(
-          ({ outgoing, incoming }) => {
-            const from = document.querySelector(
-              `[data-player-layer="current"][data-player-item="${outgoing}"]`,
-            );
-            const to = document.querySelector(
-              `[data-player-layer="incoming"][data-player-item="${incoming}"]`,
-            );
-            if (!from || !to) return false;
-            const fromOpacity = Number(getComputedStyle(from).opacity);
-            const toOpacity = Number(getComputedStyle(to).opacity);
-            return (
-              fromOpacity > 0.05 &&
-              fromOpacity < 0.95 &&
-              toOpacity > 0.05 &&
-              toOpacity < 0.95
-            );
-          },
-          { outgoing, incoming },
-        ),
-      { intervals: [25], timeout: 4000 },
-    )
-    .toBe(true);
+  const observed = await page.evaluate(
+    ({ outgoing, incoming }) =>
+      new Promise<boolean>((resolve) => {
+        const fromSelector = `[data-player-layer="current"][data-player-item="${outgoing}"]`;
+        const toSelector = `[data-player-layer="incoming"][data-player-item="${incoming}"]`;
+        const isPartiallyVisible = (selector: string) => {
+          const layer = document.querySelector(selector);
+          if (!layer) return false;
+          const opacity = Number(getComputedStyle(layer).opacity);
+          return opacity > 0.05 && opacity < 0.95;
+        };
+        let frame: number;
+        const timeout = window.setTimeout(() => {
+          window.cancelAnimationFrame(frame);
+          resolve(false);
+        }, 4000);
+        const sample = () => {
+          if (
+            isPartiallyVisible(fromSelector) &&
+            isPartiallyVisible(toSelector)
+          ) {
+            window.clearTimeout(timeout);
+            resolve(true);
+          } else {
+            frame = window.requestAnimationFrame(sample);
+          }
+        };
+        sample();
+      }),
+    { outgoing, incoming },
+  );
+  expect(observed, `Expected ${outgoing} to crossfade into ${incoming}`).toBe(
+    true,
+  );
 };
 
 test("images overlap for 500 ms without extending the outgoing item", async ({
