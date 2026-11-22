@@ -13,11 +13,32 @@ data "aws_route53_zone" "site" {
   private_zone = false
 }
 
-data "aws_acm_certificate" "site" {
-  provider    = aws.cloudfront
-  domain      = local.domain_name
-  statuses    = ["ISSUED"]
-  most_recent = true
+resource "aws_acm_certificate" "site" {
+  provider          = aws.cloudfront
+  domain_name       = local.domain_name
+  validation_method = "DNS"
+
+  lifecycle {
+    create_before_destroy = true
+  }
+}
+
+resource "aws_route53_record" "certificate_validation" {
+  zone_id = data.aws_route53_zone.site.zone_id
+  name    = one(aws_acm_certificate.site.domain_validation_options).resource_record_name
+  type    = "CNAME"
+  records = [one(aws_acm_certificate.site.domain_validation_options).resource_record_value]
+  ttl     = 60
+}
+
+resource "aws_acm_certificate_validation" "site" {
+  provider                = aws.cloudfront
+  certificate_arn         = aws_acm_certificate.site.arn
+  validation_record_fqdns = [aws_route53_record.certificate_validation.fqdn]
+
+  timeouts {
+    create = "30m"
+  }
 }
 
 module "platform" {
@@ -26,7 +47,7 @@ module "platform" {
   environment                = local.environment
   domain_name                = local.domain_name
   route53_zone_id            = data.aws_route53_zone.site.zone_id
-  cloudfront_certificate_arn = data.aws_acm_certificate.site.arn
+  cloudfront_certificate_arn = aws_acm_certificate_validation.site.certificate_arn
   mail_from                  = local.mail_from
   initial_owner_email        = local.initial_owner_email
   lambda_zip_path            = local.lambda_zip_path
