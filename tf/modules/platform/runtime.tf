@@ -20,7 +20,22 @@ resource "aws_cognito_user_pool_client" "web" {
   explicit_auth_flows           = ["ALLOW_USER_PASSWORD_AUTH", "ALLOW_REFRESH_TOKEN_AUTH", "ALLOW_USER_SRP_AUTH"]
 }
 
-resource "aws_sesv2_email_identity" "invites" { email_identity = var.mail_from }
+resource "aws_sesv2_email_identity" "invites" {
+  email_identity = var.domain_name
+}
+
+resource "aws_route53_record" "ses_dkim" {
+  count   = 3
+  zone_id = var.route53_zone_id
+  name    = "${local.ses_dkim_tokens[count.index]}._domainkey.${var.domain_name}"
+  type    = "CNAME"
+  ttl     = 300
+  records = ["${local.ses_dkim_tokens[count.index]}.dkim.amazonses.com"]
+}
+
+locals {
+  ses_dkim_tokens = sort(tolist(one(aws_sesv2_email_identity.invites.dkim_signing_attributes).tokens))
+}
 
 resource "aws_iam_role" "lambda" {
   name = "${local.name}-lambda"
