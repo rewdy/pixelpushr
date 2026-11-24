@@ -1,3 +1,4 @@
+import { Loader } from "@mantine/core";
 import type {
   ManifestItem,
   PlayerManifest,
@@ -19,6 +20,10 @@ import {
   receiveManifest,
 } from "../../helpers/playerQueue";
 import {
+  preparePlayerAssets,
+  startupAssetKey,
+} from "../../helpers/playerStartup";
+import {
   schedulePlaybackDeadline,
   transitionDelayMs,
 } from "../../helpers/transitionTimer";
@@ -30,6 +35,12 @@ const pollMs = Math.max(
   Number(import.meta.env.VITE_PLAYER_POLL_MS ?? 15000),
 );
 const heartbeatMs = 30000;
+const startupTimeoutMs = 10000;
+
+type Preparation = {
+  key: string;
+  ready: Set<string>;
+};
 
 type Preload = {
   sourceKey: string;
@@ -49,9 +60,7 @@ const queueItemKey = (state: QueueState): string | null => {
     : null;
 };
 
-/** Runs public, control-free playback for a display token. */
-export const PlayerPage = () => {
-  const { token } = useParams<{ token: string }>();
+const Player = ({ token }: { token: string }) => {
   const [state, setState] = useState<QueueState | null>(null);
   const [offline, setOffline] = useState(false);
   const [unavailable, setUnavailable] = useState(false);
@@ -63,15 +72,57 @@ export const PlayerPage = () => {
   const cancelVideoFade = useRef<(() => void) | null>(null);
   const boundary = useRef<{ key: string; at: number } | null>(null);
   const failedUrls = useRef(new Set<string>());
+  const startupSkipped = useRef<{
+    queue: ManifestItem[];
+    keys: Set<string>;
+  } | null>(null);
   const clockOffsetMs = useRef(0);
-  const item = state?.queue[state.index];
-  const itemKey = state ? queueItemKey(state) : null;
+  const startedRef = useRef(false);
+  const [started, setStarted] = useState(false);
+  const [preparation, setPreparation] = useState<Preparation | null>(null);
+  const [attempt, setAttempt] = useState(0);
+  const startupKey =
+    !started && !unavailable && state?.queue.length
+      ? JSON.stringify([state.overrideId, state.queue, offline, attempt])
+      : null;
+  const ready =
+    preparation?.key === startupKey ? preparation?.ready : undefined;
+  const firstReadyIndex = ready
+    ? (state?.queue.findIndex((entry) => ready.has(startupAssetKey(entry))) ??
+      -1)
+    : -1;
+  const playbackState =
+    state && !started
+      ? firstReadyIndex >= 0
+        ? { ...state, index: firstReadyIndex }
+        : null
+      : state;
+  const item = playbackState?.queue[playbackState.index];
+  const itemKey = playbackState ? queueItemKey(playbackState) : null;
   const itemKind = item?.kind;
   const imageDurationMs = item?.imageDurationMs;
   const videoMode = item?.videoMode;
   const repeatDurationMs = item?.repeatDurationMs;
-  const nextState = state ? advanceQueue(state) : null;
-  const nextItem = nextState?.queue[nextState.index];
+  const nextPlayable = useCallback((current: QueueState) => {
+    const isSkipped = ({ queue, index }: QueueState) => {
+      const target = queue[index];
+      const skipped = startupSkipped.current;
+      return (
+        target &&
+        (failedUrls.current.has(target.url) ||
+          (skipped?.queue === queue &&
+            skipped.keys.has(startupAssetKey(target))))
+      );
+    };
+    let next = advanceQueue(current);
+    for (let count = 0; count < next.queue.length && isSkipped(next); count++) {
+      next = advanceQueue(next);
+    }
+    return isSkipped(next) ? current : next;
+  }, []);
+  const nextState = started && state ? nextPlayable(state) : null;
+  const nextItem =
+    nextState !== state ? nextState?.queue[nextState.index] : undefined;
   const nextKey = nextState ? queueItemKey(nextState) : null;
   const nextSignature = nextItem
     ? JSON.stringify([
@@ -116,17 +167,67 @@ export const PlayerPage = () => {
       updateState((current) => {
         if (!current || (expectedKey && queueItemKey(current) !== expectedKey))
           return current;
-        let next = advanceQueue(current);
-        for (let count = 0; count < next.queue.length; count++) {
-          const target = next.queue[next.index];
-          if (!target || !failedUrls.current.has(target.url)) break;
-          next = advanceQueue(next);
-        }
-        const target = next.queue[next.index];
-        return target && failedUrls.current.has(target.url) ? current : next;
+        return nextPlayable(current);
       }),
-    [updateState],
+    [nextPlayable, updateState],
   );
+
+  useEffect(() => {
+    const queue = stateRef.current?.queue;
+    if (!startupKey || !queue) return;
+    const controller = new AbortController();
+    void preparePlayerAssets(
+      queue,
+      offline,
+      controller.signal,
+      startupTimeoutMs,
+    ).then((ready) => {
+      if (!controller.signal.aborted)
+        setPreparation({ key: startupKey, ready });
+    });
+    return () => controller.abort();
+  }, [startupKey, offline]);
+
+  useEffect(() => {
+    if (!startupKey || firstReadyIndex !== -1 || !ready) return;
+    const timer = window.setTimeout(() => {
+      setPreparation(null);
+      setAttempt((value) => value + 1);
+    }, pollMs);
+    return () => window.clearTimeout(timer);
+  }, [startupKey, firstReadyIndex, ready]);
+
+  const startupItem = item ? startupAssetKey(item) : null;
+  const rejectStartupItem = useCallback(() => {
+    if (!startupItem || !startupKey) return;
+    setPreparation((current) => {
+      if (current?.key !== startupKey) return current;
+      const remaining = new Set(current.ready);
+      remaining.delete(startupItem);
+      return { key: startupKey, ready: remaining };
+    });
+  }, [startupKey, startupItem]);
+
+  useEffect(() => {
+    if (!startupKey || !itemKey) return;
+    const timer = window.setTimeout(rejectStartupItem, startupTimeoutMs);
+    return () => window.clearTimeout(timer);
+  }, [startupKey, itemKey, rejectStartupItem]);
+
+  const startPlayback = () => {
+    if (!startupKey || !playbackState || !ready || startedRef.current) return;
+    startupSkipped.current = {
+      queue: playbackState.queue,
+      keys: new Set(
+        playbackState.queue
+          .map(startupAssetKey)
+          .filter((key) => !ready.has(key)),
+      ),
+    };
+    startedRef.current = true;
+    updateState((current) => current && { ...current, index: firstReadyIndex });
+    setStarted(true);
+  };
 
   const tryStartFade = useCallback(() => {
     const currentBoundary = boundary.current;
@@ -209,7 +310,14 @@ export const PlayerPage = () => {
         setUnavailable(false);
         setOffline(false);
         updateState((current) =>
-          current ? receiveManifest(current, manifest) : initialQueue(manifest),
+          current && startedRef.current
+            ? receiveManifest(current, manifest)
+            : manifest.overrideWindows
+              ? applyTimedOverride(
+                  initialQueue(manifest),
+                  Date.now() + clockOffsetMs.current,
+                )
+              : initialQueue(manifest),
         );
         void cacheManifest(token, manifest, clockOffsetMs.current).catch(
           () => undefined,
@@ -263,7 +371,7 @@ export const PlayerPage = () => {
 
   useEffect(() => {
     const report = () => {
-      const current = stateRef.current;
+      const current = startedRef.current ? stateRef.current : null;
       void fetch(`/api/player/${encodeURIComponent(token)}/heartbeat`, {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -287,7 +395,7 @@ export const PlayerPage = () => {
   }, []);
 
   useEffect(() => {
-    if (!itemKey || !timedDurationMs) return;
+    if (!started || !itemKey || !timedDurationMs) return;
     const at =
       boundary.current?.key === itemKey
         ? boundary.current.at
@@ -303,7 +411,14 @@ export const PlayerPage = () => {
       window.clearTimeout(timer);
       cancelFade?.();
     };
-  }, [itemKey, timedDurationMs, overlapStartMs, advance, tryStartFade]);
+  }, [
+    started,
+    itemKey,
+    timedDurationMs,
+    overlapStartMs,
+    advance,
+    tryStartFade,
+  ]);
 
   const onMediaError = useCallback(
     (url: string, key: string) => {
@@ -386,22 +501,35 @@ export const PlayerPage = () => {
     <div className={classes.stage}>
       {unavailable ? (
         <div className={classes.empty}>Display unavailable</div>
+      ) : startupKey && (firstReadyIndex >= 0 || !ready) ? (
+        <div className={classes.empty} role="status" aria-label="Loading media">
+          <Loader size="lg" color="white" type="oval" />
+        </div>
       ) : !item ? (
         <div className={classes.empty}>
-          {offline ? "Waiting for cached content" : "Waiting for a playlist"}
+          {offline
+            ? "Waiting for cached content"
+            : startupKey
+              ? "Waiting for playable media"
+              : "Waiting for a playlist"}
         </div>
-      ) : (
+      ) : null}
+      {!unavailable && item && (
         <>
           <PlayerMediaLayer
             key={itemKey}
             item={item}
             offline={offline}
             active
+            preparing={!started}
             fadingIn={false}
             fadingOut={!!visiblePreload?.started}
             fadeMs={visiblePreload?.fadeMs ?? 0}
-            onReady={() => undefined}
-            onFailed={() => onMediaError(item.url, itemKey ?? "")}
+            onReady={startPlayback}
+            onFailed={() => {
+              if (started) onMediaError(item.url, itemKey ?? "");
+              else rejectStartupItem();
+            }}
             onVideoEnded={finishVideoOnce}
             onVideoTimeUpdate={onVideoTimeUpdate}
             onVideoPlaying={onVideoPlaying}
@@ -426,10 +554,17 @@ export const PlayerPage = () => {
       )}
       {diagnostics && (
         <div className={classes.diagnostic}>
-          {offline ? "offline" : "online"} · {item?.id ?? "empty"} ·{" "}
+          {offline ? "offline" : "online"} ·{" "}
+          {started ? (item?.id ?? "empty") : "empty"} ·{" "}
           {state?.version.slice(0, 8) ?? "none"}
         </div>
       )}
     </div>
   );
+};
+
+/** Runs public, control-free playback for a display token. */
+export const PlayerPage = () => {
+  const { token } = useParams<{ token: string }>();
+  return <Player key={token} token={token} />;
 };
