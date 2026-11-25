@@ -1,4 +1,7 @@
 import { type ChildProcess, spawn } from "node:child_process";
+import { once } from "node:events";
+import { createServer } from "node:net";
+import type { CreateInvitationResponse } from "@pixelpushr/contracts/invitations";
 import { expect, type Locator, type Page, test } from "@playwright/test";
 import { migrate } from "drizzle-orm/postgres-js/migrator";
 import postgres from "postgres";
@@ -31,6 +34,9 @@ let connection: ReturnType<typeof createDatabase>;
 let api: ChildProcess;
 let token: string;
 let administratorToken: string;
+const rejectingSmtp = createServer((socket) =>
+  socket.end("421 Test mail service unavailable\r\n"),
+);
 
 const chooseCalendarDate = async (
   page: Page,
@@ -103,27 +109,20 @@ const chooseDateTime = async (
   await dropdown.locator('button[class*="submitButton"]').click();
 };
 
-test.beforeAll(async () => {
-  admin = postgres(adminUrl, { max: 1 });
-  await admin`CREATE DATABASE ${admin(databaseName)}`;
-  const url = new URL(adminUrl);
-  url.pathname = `/${databaseName}`;
-  connection = createDatabase(url.toString());
-  await migrate(connection.db, {
-    migrationsFolder: new URL("../../apps/api/drizzle", import.meta.url)
-      .pathname,
-  });
+const startApi = async (smtpUrl: string) => {
+  const databaseUrl = new URL(adminUrl);
+  databaseUrl.pathname = `/${databaseName}`;
   api = spawn("bun", ["apps/api/src/local.ts"], {
     cwd: new URL("../../", import.meta.url).pathname,
     env: {
       ...process.env,
       PORT: String(apiPort),
-      DATABASE_URL: url.toString(),
+      DATABASE_URL: databaseUrl.toString(),
       AUTH_MODE: "local",
       APP_ENV: "local",
       LOCAL_AUTH_SECRET: secret,
       PUBLIC_WEB_URL: "http://127.0.0.1:5173",
-      SMTP_URL: "smtp://127.0.0.1:1025",
+      SMTP_URL: smtpUrl,
       MAIL_FROM: "invites@example.com",
       MEDIA_STORAGE: "s3",
       MEDIA_BUCKET: "pixelpushr-media",
@@ -148,9 +147,35 @@ test.beforeAll(async () => {
     }
   }
   if (!ready) throw new Error("Browser-test API did not start");
+};
+
+const stopApi = async () => {
+  if (!api || api.exitCode !== null || api.signalCode !== null) return;
+  const exited = once(api, "exit");
+  api.kill("SIGTERM");
+  await exited;
+};
+
+test.beforeAll(async () => {
+  admin = postgres(adminUrl, { max: 1 });
+  await admin`CREATE DATABASE ${admin(databaseName)}`;
+  const url = new URL(adminUrl);
+  url.pathname = `/${databaseName}`;
+  connection = createDatabase(url.toString());
+  await migrate(connection.db, {
+    migrationsFolder: new URL("../../apps/api/drizzle", import.meta.url)
+      .pathname,
+  });
+  const listening = once(rejectingSmtp, "listening");
+  rejectingSmtp.listen(0, "127.0.0.1");
+  await listening;
+  const address = rejectingSmtp.address();
+  if (!address || typeof address === "string")
+    throw new Error("Test mail server has no TCP address");
+  await startApi(`smtp://127.0.0.1:${address.port}`);
 });
 
-test("owner sets up the workspace and invites an administrator in the browser", async ({
+test("owner shares a working administrator invitation when email fails", async ({
   page,
   browser,
 }) => {
@@ -208,7 +233,7 @@ test("owner sets up the workspace and invites an administrator in the browser", 
   );
   expect(token).toBeTruthy();
   await page.goto("/people");
-  await page.getByRole("button", { name: "Send invitation" }).click();
+  await page.getByRole("button", { name: "Create invitation" }).click();
   await page
     .getByRole("textbox", { name: "Email address" })
     .fill("browser-admin@example.com");
@@ -218,12 +243,28 @@ test("owner sets up the workspace and invites an administrator in the browser", 
       response.request().method() === "POST",
   );
   await page
-    .getByRole("dialog", { name: "Send invitation" })
-    .getByRole("button", { name: "Send invitation" })
+    .getByRole("dialog", { name: "Create invitation" })
+    .getByRole("button", { name: "Create invitation" })
     .click();
   const invitation = await inviteResponse;
   expect(invitation.status()).toBe(201);
-  const inviteUrl = ((await invitation.json()) as { url: string }).url;
+  const result = (await invitation.json()) as CreateInvitationResponse;
+  await expect(
+    page.getByRole("textbox", { name: "Invitation link" }),
+  ).toHaveValue(result.url);
+  await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
+  await page.getByRole("button", { name: "Copy link" }).click();
+  await expect(page.getByRole("button", { name: "Copied" })).toBeVisible();
+  const inviteUrl = await page.evaluate(() => navigator.clipboard.readText());
+  expect(inviteUrl).toBe(result.url);
+  await page.getByRole("button", { name: "Send email" }).click();
+  await expect(
+    page.getByText("Couldn’t confirm email.", { exact: false }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Copy link" }).click();
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(
+    inviteUrl,
+  );
   const invitedContext = await browser.newContext();
   const invited = await invitedContext.newPage();
   await invited.goto(inviteUrl);
@@ -259,10 +300,13 @@ test("owner sets up the workspace and invites an administrator in the browser", 
   await expect(
     page.getByText("browser-admin@example.com").first(),
   ).toBeVisible();
+  await stopApi();
+  await startApi("smtp://127.0.0.1:1025");
 });
 
 test.afterAll(async () => {
-  if (api) api.kill("SIGTERM");
+  await stopApi();
+  rejectingSmtp.close();
   if (connection) {
     const storage = createS3Storage({
       region: "us-east-1",
@@ -669,18 +713,18 @@ test("listing links and creation dialogs preserve input and permissions", async 
   await expect(displayDialog).toBeHidden();
 
   await page.goto("/people");
-  await page.getByRole("button", { name: "Send invitation" }).click();
-  const inviteDialog = page.getByRole("dialog", { name: "Send invitation" });
+  await page.getByRole("button", { name: "Create invitation" }).click();
+  const inviteDialog = page.getByRole("dialog", { name: "Create invitation" });
   await inviteDialog
     .getByRole("textbox", { name: "Email address" })
     .fill("cancel@example.com");
   await inviteDialog.getByRole("button", { name: "Cancel" }).click();
   await expect(inviteDialog).toBeHidden();
-  await page.getByRole("button", { name: "Send invitation" }).click();
+  await page.getByRole("button", { name: "Create invitation" }).click();
   await inviteDialog
     .getByRole("textbox", { name: "Email address" })
     .fill("invalid");
-  await inviteDialog.getByRole("button", { name: "Send invitation" }).click();
+  await inviteDialog.getByRole("button", { name: "Create invitation" }).click();
   await expect(
     inviteDialog.getByText("Enter a valid email address."),
   ).toBeVisible();
@@ -698,15 +742,49 @@ test("listing links and creation dialogs preserve input and permissions", async 
       }),
     { times: 1 },
   );
-  await inviteDialog.getByRole("button", { name: "Send invitation" }).click();
+  await inviteDialog.getByRole("button", { name: "Create invitation" }).click();
   await expect(inviteDialog.getByText("Invitation unavailable")).toBeVisible();
   await expect(
     inviteDialog.getByRole("textbox", { name: "Email address" }),
   ).toHaveValue("retry@example.com");
-  await inviteDialog.getByRole("button", { name: "Send invitation" }).click();
+  await inviteDialog.getByRole("button", { name: "Create invitation" }).click();
   await expect(inviteDialog).toBeHidden();
-  await expect(page.getByText("Invitation sent.")).toBeVisible();
+  await page.getByRole("button", { name: "Send email" }).click();
+  await expect(
+    page.getByText("Email submitted.", { exact: false }),
+  ).toBeVisible();
   await expect(page.getByRole("button", { name: "Copy link" })).toBeVisible();
+
+  const linkField = page.getByRole("textbox", { name: "Invitation link" });
+  const originalLink = await linkField.inputValue();
+  const revokeButton = page.getByRole("button", {
+    name: "Revoke invitation for retry@example.com",
+  });
+  await revokeButton.click();
+  const revokeDialog = page.getByRole("dialog", { name: "Revoke invitation" });
+  await expect(
+    revokeDialog.getByText("retry@example.com", { exact: false }),
+  ).toBeVisible();
+  await revokeDialog.getByRole("button", { name: "Cancel" }).click();
+  await expect(linkField).toHaveValue(originalLink);
+
+  await page.reload();
+  await expect(linkField).toHaveCount(0);
+  await revokeButton.click();
+  await revokeDialog.getByRole("button", { name: "Revoke invitation" }).click();
+  await expect(revokeDialog).toBeHidden();
+  await expect(revokeButton).toHaveCount(0);
+
+  await page.getByRole("button", { name: "Create invitation" }).click();
+  await inviteDialog
+    .getByRole("textbox", { name: "Email address" })
+    .fill("retry@example.com");
+  await inviteDialog.getByRole("button", { name: "Create invitation" }).click();
+  await expect(linkField).toBeVisible();
+  await expect(linkField).not.toHaveValue(originalLink);
+  await revokeButton.click();
+  await revokeDialog.getByRole("button", { name: "Revoke invitation" }).click();
+  await expect(linkField).toHaveCount(0);
 
   // A separate page avoids rerunning the owner's page-level init script.
   const administratorPage = await page.context().newPage();
@@ -720,7 +798,10 @@ test("listing links and creation dialogs preserve input and permissions", async 
     administratorPage.getByRole("heading", { name: "People & access" }),
   ).toBeVisible();
   await expect(
-    administratorPage.getByRole("button", { name: "Send invitation" }),
+    administratorPage.getByRole("button", { name: "Create invitation" }),
+  ).toHaveCount(0);
+  await expect(
+    administratorPage.getByRole("button", { name: /^Revoke invitation/ }),
   ).toHaveCount(0);
 });
 
