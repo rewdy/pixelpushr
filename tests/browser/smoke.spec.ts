@@ -51,7 +51,9 @@ test("public player route loads", async ({ page }) => {
   await expect(page.getByRole("button")).toHaveCount(0);
 });
 
-test("owner can send an invitation through the console", async ({ page }) => {
+test("owner can create a shareable invitation through the console", async ({
+  page,
+}) => {
   await page.addInitScript(() =>
     sessionStorage.setItem("pixelpushr-admin-session", "test-token"),
   );
@@ -85,7 +87,15 @@ test("owner can send an invitation through the console", async ({ page }) => {
         .email;
       return route.fulfill({
         status: 201,
-        json: { url: "http://localhost/invite/test-token" },
+        json: {
+          invitation: {
+            id: "invite",
+            email: invitedEmail,
+            status: "pending",
+            expiresAt: new Date().toISOString(),
+          },
+          url: "http://localhost/invite/test-token",
+        },
       });
     }
     return route.fulfill({ json: { invitations: [] } });
@@ -94,15 +104,19 @@ test("owner can send an invitation through the console", async ({ page }) => {
   await expect(
     page.getByRole("heading", { name: "People & access" }),
   ).toBeVisible();
-  await page.getByRole("button", { name: "Send invitation" }).click();
+  await expect(page.getByText("No invitations pending.")).toBeVisible();
+  await page.getByRole("button", { name: "Create invitation" }).click();
   await page
     .getByRole("textbox", { name: "Email address" })
     .fill("new-admin@example.com");
   await page
-    .getByRole("dialog", { name: "Send invitation" })
-    .getByRole("button", { name: "Send invitation" })
+    .getByRole("dialog", { name: "Create invitation" })
+    .getByRole("button", { name: "Create invitation" })
     .click();
-  await expect(page.getByText("Invitation sent.")).toBeVisible();
+  await expect(
+    page.getByText("Invitation created for new-admin@example.com."),
+  ).toBeVisible();
+  await expect(page.getByRole("button", { name: "Copy link" })).toBeVisible();
   expect(invitedEmail).toBe("new-admin@example.com");
 });
 

@@ -2,6 +2,10 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type {
+  CreateInvitationResponse,
+  SendInvitationEmailResponse,
+} from "@pixelpushr/contracts/invitations";
 import { eq } from "drizzle-orm";
 import { migrate } from "drizzle-orm/postgres-js/migrator";
 import postgres from "postgres";
@@ -28,6 +32,19 @@ let readyImageId: string;
 let readyPlaylistId: string;
 let mediaStorage: ReturnType<typeof createLocalStorage>;
 const sentInvitations: { email: string; url: string }[] = [];
+let stalledEmail:
+  | { signal: AbortSignal; reject: (error: Error) => void }
+  | undefined;
+
+const sendInvitationEmail = (accessToken: string, url: string) =>
+  app.request("/admin/invitations/email", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      authorization: `Bearer ${accessToken}`,
+    },
+    body: JSON.stringify({ token: new URL(url).pathname.split("/").at(-1) }),
+  });
 
 describe("first-run organization setup", () => {
   beforeAll(async () => {
@@ -53,8 +70,15 @@ describe("first-run organization setup", () => {
         "test-secret-longer-than-thirty-two-characters",
       ),
       mailer: {
-        send: async (email, url) => {
+        send: async (email, url, signal) => {
           sentInvitations.push({ email, url });
+          if (email === "new-admin@example.com")
+            throw new Error("Provider rejected submission");
+          if (email === "stalled@example.com") {
+            return new Promise<void>((_resolve, reject) => {
+              stalledEmail = { signal, reject };
+            });
+          }
         },
       },
       publicWebUrl: "http://127.0.0.1:5173",
@@ -189,10 +213,20 @@ describe("first-run organization setup", () => {
       });
     const invitation = await invite();
     expect(invitation.status).toBe(201);
-    const invitationBody = (await invitation.json()) as { url: string };
-    expect(sentInvitations).toEqual([
-      { email: "new-admin@example.com", url: invitationBody.url },
-    ]);
+    expect(invitation.headers.get("Cache-Control")).toBe("no-store");
+    const invitationBody =
+      (await invitation.json()) as CreateInvitationResponse;
+    expect(sentInvitations).toHaveLength(0);
+    const emailResponse = await sendInvitationEmail(
+      ownerToken,
+      invitationBody.url,
+    );
+    expect(emailResponse.status).toBe(200);
+    expect((await emailResponse.json()) as SendInvitationEmailResponse).toEqual(
+      {
+        emailStatus: "unconfirmed",
+      },
+    );
     const duplicate = await invite();
     expect(duplicate.status).toBe(409);
     const registered = await app.request("/auth/register", {
@@ -216,16 +250,30 @@ describe("first-run organization setup", () => {
       .accessToken;
     const token = invitationBody.url.split("/").at(-1);
     if (!token) throw new Error("Invitation URL has no token");
-    const accept = () =>
+    const accept = (accessToken: string) =>
       app.request("/invitations/accept", {
         method: "POST",
         headers: {
           "content-type": "application/json",
-          authorization: `Bearer ${adminToken}`,
+          authorization: `Bearer ${accessToken}`,
         },
         body: JSON.stringify({ token }),
       });
-    const accepted = await accept();
+    const listed = await app.request("/admin/invitations", {
+      headers: { authorization: `Bearer ${ownerToken}` },
+    });
+    const list = (await listed.json()) as {
+      invitations: Record<string, unknown>[];
+    };
+    const record = list.invitations.find(
+      (item) => item.id === invitationBody.invitation.id,
+    );
+    expect(record).toMatchObject({ status: "pending" });
+    expect(record).not.toHaveProperty("url");
+    expect(record).not.toHaveProperty("token");
+    expect(record).not.toHaveProperty("tokenHash");
+    expect((await accept(ownerToken)).status).toBe(403);
+    const accepted = await accept(adminToken);
     expect(accepted.status).toBe(200);
     const me = await app.request("/admin/me", {
       headers: { authorization: `Bearer ${adminToken}` },
@@ -233,8 +281,106 @@ describe("first-run organization setup", () => {
     expect(
       ((await me.json()) as { membership: { role: string } }).membership.role,
     ).toBe("admin");
-    const repeat = await accept();
+    const repeat = await accept(adminToken);
     expect(repeat.status).toBe(409);
+    expect(
+      (
+        await app.request(
+          `/admin/invitations/${invitationBody.invitation.id}`,
+          {
+            method: "DELETE",
+            headers: { authorization: `Bearer ${ownerToken}` },
+          },
+        )
+      ).status,
+    ).toBe(404);
+    const unauthorized = await app.request("/admin/invitations", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${adminToken}`,
+      },
+      body: JSON.stringify({ email: "other-invite@example.com" }),
+    });
+    expect(unauthorized.status).toBe(403);
+    expect(
+      (await sendInvitationEmail(adminToken, invitationBody.url)).status,
+    ).toBe(403);
+    expect(
+      (await sendInvitationEmail(ownerToken, invitationBody.url)).status,
+    ).toBe(409);
+    expect(
+      (
+        await sendInvitationEmail(
+          ownerToken,
+          "https://example.com/invite/unknown-invitation-token",
+        )
+      ).status,
+    ).toBe(404);
+    expect(sentInvitations).toHaveLength(1);
+  });
+
+  test("only the owner can revoke a pending invitation and reissue it", async () => {
+    const login = async (email: string, password: string) => {
+      const response = await app.request("/auth/login", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ email, password }),
+      });
+      expect(response.status).toBe(200);
+      return ((await response.json()) as { accessToken: string }).accessToken;
+    };
+    const owner = await login("owner@example.com", "super-long-password");
+    const administrator = await login(
+      "new-admin@example.com",
+      "another-long-password",
+    );
+    const headers = {
+      "content-type": "application/json",
+      authorization: `Bearer ${owner}`,
+    };
+    const create = () =>
+      app.request("/admin/invitations", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ email: "lost-link@example.com" }),
+      });
+    const response = await create();
+    expect(response.status).toBe(201);
+    const original = (await response.json()) as CreateInvitationResponse;
+    const revoke = (id: string, accessToken: string) =>
+      app.request(`/admin/invitations/${id}`, {
+        method: "DELETE",
+        headers: { authorization: `Bearer ${accessToken}` },
+      });
+    expect((await revoke("invalid", owner)).status).toBe(400);
+    expect((await revoke(original.invitation.id, administrator)).status).toBe(
+      403,
+    );
+    expect((await create()).status).toBe(409);
+    expect((await revoke(original.invitation.id, owner)).status).toBe(200);
+    expect((await revoke(original.invitation.id, owner)).status).toBe(404);
+    const replacement = await create();
+    expect(replacement.status).toBe(201);
+    expect(
+      ((await replacement.json()) as CreateInvitationResponse).url,
+    ).not.toBe(original.url);
+    const listed = await app.request("/admin/invitations", { headers });
+    const { invitations: listedInvitations } = (await listed.json()) as {
+      invitations: { id: string }[];
+    };
+    expect(
+      listedInvitations.some(({ id }) => id === original.invitation.id),
+    ).toBe(false);
+    const accept = await app.request("/invitations/accept", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        token: new URL(original.url).pathname.split("/").at(-1),
+      }),
+    });
+    expect(accept.status).toBe(404);
+    expect((await sendInvitationEmail(owner, original.url)).status).toBe(404);
   });
 
   test("expired invitation cannot be accepted and is reported expired", async () => {
@@ -256,10 +402,20 @@ describe("first-run organization setup", () => {
       },
       body: JSON.stringify({ email: "expired@example.com" }),
     });
-    const { invitation: record, url } = (await invitation.json()) as {
-      invitation: { id: string };
-      url: string;
-    };
+    expect(invitation.status).toBe(201);
+    const { invitation: record, url } =
+      (await invitation.json()) as CreateInvitationResponse;
+    const emailResponse = await sendInvitationEmail(ownerToken, url);
+    expect(emailResponse.status).toBe(200);
+    expect((await emailResponse.json()) as SendInvitationEmailResponse).toEqual(
+      {
+        emailStatus: "submitted",
+      },
+    );
+    expect(sentInvitations).toContainEqual({
+      email: "expired@example.com",
+      url,
+    });
     await connection.db
       .update(invitations)
       .set({ expiresAt: new Date(Date.now() - 1000) })
@@ -291,7 +447,56 @@ describe("first-run organization setup", () => {
       body: JSON.stringify({ token: url.split("/").at(-1) }),
     });
     expect(accept.status).toBe(410);
+    expect(
+      (
+        await app.request(`/admin/invitations/${record.id}`, {
+          method: "DELETE",
+          headers: { authorization: `Bearer ${ownerToken}` },
+        })
+      ).status,
+    ).toBe(404);
+    expect((await sendInvitationEmail(ownerToken, url)).status).toBe(410);
+    expect(
+      sentInvitations.filter(({ email }) => email === "expired@example.com"),
+    ).toHaveLength(1);
   });
+
+  test("a stalled optional mail attempt reaches its deadline independently of creation", async () => {
+    const ownerLogin = await app.request("/auth/login", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        email: "owner@example.com",
+        password: "super-long-password",
+      }),
+    });
+    const { accessToken } = (await ownerLogin.json()) as {
+      accessToken: string;
+    };
+    const response = await app.request("/admin/invitations", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${accessToken}`,
+      },
+      body: JSON.stringify({ email: "stalled@example.com" }),
+    });
+    expect(response.status).toBe(201);
+    const body = (await response.json()) as CreateInvitationResponse;
+    expect(stalledEmail).toBeUndefined();
+    const emailResponse = await sendInvitationEmail(accessToken, body.url);
+    expect(emailResponse.status).toBe(200);
+    expect((await emailResponse.json()) as SendInvitationEmailResponse).toEqual(
+      {
+        emailStatus: "unconfirmed",
+      },
+    );
+    expect(body.invitation.status).toBe("pending");
+    expect(body.url).toMatch(/^http:\/\/127\.0\.0\.1:5173\/invite\//);
+    expect(stalledEmail?.signal.aborted).toBe(true);
+    stalledEmail?.reject(new Error("Late mail provider rejection"));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }, 10_000);
 
   test("supported upload becomes ready and unsupported upload stays failed", async () => {
     const ownerLogin = await app.request("/auth/login", {

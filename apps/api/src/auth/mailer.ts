@@ -1,8 +1,38 @@
 import { SESv2Client, SendEmailCommand } from "@aws-sdk/client-sesv2";
+import type { SendInvitationEmailResponse } from "@pixelpushr/contracts/invitations";
 import nodemailer from "nodemailer";
 
 export type InvitationMailer = {
-  send: (email: string, url: string) => Promise<void>;
+  send: (email: string, url: string, signal: AbortSignal) => Promise<void>;
+};
+
+/** Attempts email submission without blocking invitation sharing indefinitely. */
+export const submitInvitationEmail = async (
+  mailer: InvitationMailer,
+  email: string,
+  url: string,
+): Promise<SendInvitationEmailResponse["emailStatus"]> => {
+  const controller = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => {
+      reject(new Error("Invitation email deadline exceeded"));
+      controller.abort();
+    }, 5_000);
+  });
+  try {
+    await Promise.race([deadline, mailer.send(email, url, controller.signal)]);
+    return "submitted";
+  } catch {
+    console.warn(
+      controller.signal.aborted
+        ? "invitation_email_timeout"
+        : "invitation_email_submission_failed",
+    );
+    return "unconfirmed";
+  } finally {
+    clearTimeout(timer);
+  }
 };
 
 const invitationText = (url: string) =>
@@ -33,7 +63,7 @@ export const createSesMailer = (
 ): InvitationMailer => {
   const client = new SESv2Client({ region });
   return {
-    send: async (email, url) => {
+    send: async (email, url, signal) => {
       await client.send(
         new SendEmailCommand({
           FromEmailAddress: from,
@@ -45,6 +75,7 @@ export const createSesMailer = (
             },
           },
         }),
+        { abortSignal: signal },
       );
     },
   };

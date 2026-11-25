@@ -1,3 +1,7 @@
+import type {
+  CreateInvitationResponse,
+  SendInvitationEmailResponse,
+} from "@pixelpushr/contracts/invitations";
 import { and, eq, gt, sql } from "drizzle-orm";
 import type { Hono } from "hono";
 import { z } from "zod";
@@ -7,7 +11,7 @@ import { invitations, memberships, organizations, users } from "../db/schema";
 import { ApiError } from "../http/errors";
 import { parseJsonBody } from "../http/validation";
 import type { MediaStorage } from "../media/storage";
-import type { InvitationMailer } from "./mailer";
+import { type InvitationMailer, submitInvitationEmail } from "./mailer";
 import type { AuthProvider, Identity } from "./provider";
 
 export type AppDependencies = {
@@ -264,11 +268,8 @@ export const registerAuthRoutes = (
     return context.json({ organization });
   });
 
-  app.get("/admin/invitations", async (context) => {
-    const identity = await bearerIdentity(
-      context.req.header("authorization"),
-      auth,
-    );
+  const requireInvitationOwner = async (authorization: string | undefined) => {
+    const identity = await bearerIdentity(authorization, auth);
     const user = await db.query.users.findFirst({
       where: eq(users.subject, identity.subject),
     });
@@ -279,6 +280,15 @@ export const registerAuthRoutes = (
       : undefined;
     if (membership?.role !== "owner")
       throw new ApiError(403, "forbidden", "Owner access required");
+    return membership;
+  };
+  const invitationUrl = (token: string) =>
+    `${publicWebUrl.replace(/\/$/, "")}/invite/${token}`;
+
+  app.get("/admin/invitations", async (context) => {
+    const membership = await requireInvitationOwner(
+      context.req.header("authorization"),
+    );
     const records = await db.query.invitations.findMany({
       where: eq(invitations.organizationId, membership.organizationId),
     });
@@ -294,20 +304,9 @@ export const registerAuthRoutes = (
   });
 
   app.post("/admin/invitations", async (context) => {
-    const identity = await bearerIdentity(
+    const membership = await requireInvitationOwner(
       context.req.header("authorization"),
-      auth,
     );
-    const user = await db.query.users.findFirst({
-      where: eq(users.subject, identity.subject),
-    });
-    const membership = user
-      ? await db.query.memberships.findFirst({
-          where: eq(memberships.userId, user.id),
-        })
-      : undefined;
-    if (membership?.role !== "owner")
-      throw new ApiError(403, "forbidden", "Owner access required");
     const { email } = await parseJsonBody(context, inviteSchema);
     const existingUser = await db.query.users.findFirst({
       where: eq(users.email, email),
@@ -354,29 +353,71 @@ export const registerAuthRoutes = (
         })
         .returning(),
     );
-    const url = `${publicWebUrl.replace(/\/$/, "")}/invite/${token}`;
-    try {
-      await mailer.send(email, url);
-    } catch (error) {
-      await db.delete(invitations).where(eq(invitations.id, record.id));
-      throw new ApiError(
-        503,
-        "internal_error",
-        `Invitation delivery failed: ${error instanceof Error ? error.message : "unknown error"}`,
-      );
-    }
+    context.header("Cache-Control", "no-store");
     return context.json(
       {
         invitation: {
           id: record.id,
           email: record.email,
           status: record.status,
-          expiresAt: record.expiresAt,
+          expiresAt: record.expiresAt.toISOString(),
         },
-        url,
-      },
+        url: invitationUrl(token),
+      } satisfies CreateInvitationResponse,
       201,
     );
+  });
+
+  app.delete("/admin/invitations/:id", async (context) => {
+    const membership = await requireInvitationOwner(
+      context.req.header("authorization"),
+    );
+    const id = z.uuid().safeParse(context.req.param("id"));
+    if (!id.success)
+      throw new ApiError(400, "invalid_request", "Invalid invitation ID");
+    const [revoked] = await db
+      .delete(invitations)
+      .where(
+        and(
+          eq(invitations.id, id.data),
+          eq(invitations.organizationId, membership.organizationId),
+          eq(invitations.status, "pending"),
+          gt(invitations.expiresAt, sql`now()`),
+        ),
+      )
+      .returning({ id: invitations.id });
+    if (!revoked)
+      throw new ApiError(404, "not_found", "Pending invitation not found");
+    return context.json({ revoked: true });
+  });
+
+  app.post("/admin/invitations/email", async (context) => {
+    const membership = await requireInvitationOwner(
+      context.req.header("authorization"),
+    );
+    const { token } = await parseJsonBody(context, acceptSchema);
+    const invitation = await db.query.invitations.findFirst({
+      where: and(
+        eq(invitations.organizationId, membership.organizationId),
+        eq(invitations.tokenHash, await hashToken(token)),
+      ),
+    });
+    if (!invitation)
+      throw new ApiError(404, "not_found", "Invitation not found");
+    if (invitation.status === "expired" || invitation.expiresAt <= new Date())
+      throw new ApiError(410, "conflict", "Invitation has expired");
+    if (invitation.status === "accepted")
+      throw new ApiError(
+        409,
+        "conflict",
+        "Invitation has already been accepted",
+      );
+    const emailStatus = await submitInvitationEmail(
+      mailer,
+      invitation.email,
+      invitationUrl(token),
+    );
+    return context.json<SendInvitationEmailResponse>({ emailStatus });
   });
 
   app.post("/invitations/accept", async (context) => {

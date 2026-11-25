@@ -12,6 +12,11 @@ import {
   TextInput,
   Title,
 } from "@mantine/core";
+import type {
+  CreateInvitationResponse,
+  Invitation,
+  SendInvitationEmailResponse,
+} from "@pixelpushr/contracts/invitations";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { requestJson } from "../../helpers/api";
@@ -23,20 +28,16 @@ type Member = {
   role: "owner" | "admin";
   joinedAt: string;
 };
-type Invitation = {
-  id: string;
-  email: string;
-  status: "pending" | "accepted" | "expired";
-  expiresAt: string;
-};
 
-/** Lists administrators and lets the owner send and copy invitation links. */
+/** Lists administrators and lets the owner create, share, and revoke invitations. */
 export const PeoplePage = ({ role }: { role: "owner" | "admin" }) => {
   const queryClient = useQueryClient();
   const [email, setEmail] = useState("");
   const [inviteOpen, setInviteOpen] = useState(false);
   const [emailError, setEmailError] = useState("");
-  const [lastUrl, setLastUrl] = useState("");
+  const [lastInvitation, setLastInvitation] =
+    useState<CreateInvitationResponse>();
+  const [revokeTarget, setRevokeTarget] = useState<Invitation>();
   const closeInvite = () => {
     setInviteOpen(false);
     setEmail("");
@@ -53,15 +54,41 @@ export const PeoplePage = ({ role }: { role: "owner" | "admin" }) => {
       requestJson<{ invitations: Invitation[] }>("/admin/invitations"),
     enabled: role === "owner",
   });
+  const sendEmail = useMutation({
+    mutationFn: (url: string) =>
+      requestJson<SendInvitationEmailResponse>("/admin/invitations/email", {
+        method: "POST",
+        body: JSON.stringify({
+          token: new URL(url).pathname.split("/").at(-1),
+        }),
+      }),
+  });
   const invite = useMutation({
     mutationFn: () =>
-      requestJson<{ url: string }>("/admin/invitations", {
+      requestJson<CreateInvitationResponse>("/admin/invitations", {
         method: "POST",
         body: JSON.stringify({ email }),
       }),
-    onSuccess: ({ url }) => {
-      setLastUrl(url);
+    onSuccess: (result) => {
+      sendEmail.reset();
+      setLastInvitation(result);
       closeInvite();
+      void queryClient.invalidateQueries({ queryKey: ["invitations"] });
+    },
+  });
+  const revoke = useMutation({
+    mutationFn: (id: string) =>
+      requestJson<{ revoked: true }>(`/admin/invitations/${id}`, {
+        method: "DELETE",
+      }),
+    onSuccess: (_result, id) => {
+      if (lastInvitation?.invitation.id === id) {
+        setLastInvitation(undefined);
+        sendEmail.reset();
+      }
+      setRevokeTarget(undefined);
+    },
+    onSettled: () => {
       void queryClient.invalidateQueries({ queryKey: ["invitations"] });
     },
   });
@@ -81,19 +108,50 @@ export const PeoplePage = ({ role }: { role: "owner" | "admin" }) => {
           <Stack>
             <Title order={3}>Invite an administrator</Title>
             <Button w="fit-content" onClick={() => setInviteOpen(true)}>
-              Send invitation
+              Create invitation
             </Button>
-            {lastUrl && (
-              <Group>
-                <Text size="sm">Invitation sent.</Text>
-                <CopyButton value={lastUrl}>
-                  {({ copied, copy }) => (
-                    <Button size="xs" variant="light" onClick={copy}>
-                      {copied ? "Copied" : "Copy link"}
-                    </Button>
-                  )}
-                </CopyButton>
-              </Group>
+            {lastInvitation && (
+              <Stack gap="xs">
+                <Text size="sm" role="status">
+                  Invitation created for {lastInvitation.invitation.email}.
+                  {sendEmail.data?.emailStatus === "submitted" &&
+                    " Email submitted."}
+                  {sendEmail.data?.emailStatus === "unconfirmed" &&
+                    " Couldn’t confirm email. Share the link directly."}
+                </Text>
+                <TextInput
+                  label="Invitation link"
+                  value={lastInvitation.url}
+                  readOnly
+                />
+                <Group gap="xs">
+                  <CopyButton
+                    key={lastInvitation.invitation.id}
+                    value={lastInvitation.url}
+                  >
+                    {({ copied, copy }) => (
+                      <Button size="xs" variant="light" onClick={copy}>
+                        {copied ? "Copied" : "Copy link"}
+                      </Button>
+                    )}
+                  </CopyButton>
+                  <Button
+                    size="xs"
+                    variant="default"
+                    loading={sendEmail.isPending}
+                    disabled={sendEmail.data?.emailStatus === "submitted"}
+                    onClick={() => sendEmail.mutate(lastInvitation.url)}
+                  >
+                    Send email
+                  </Button>
+                </Group>
+                {sendEmail.error && (
+                  <Alert color="red">{sendEmail.error.message}</Alert>
+                )}
+                <Text size="xs" c="dimmed">
+                  Copy the link before leaving this page.
+                </Text>
+              </Stack>
             )}
           </Stack>
         </Paper>
@@ -102,7 +160,7 @@ export const PeoplePage = ({ role }: { role: "owner" | "admin" }) => {
         <Modal
           opened={inviteOpen}
           onClose={closeInvite}
-          title="Send invitation"
+          title="Create invitation"
           centered
         >
           <form
@@ -138,7 +196,7 @@ export const PeoplePage = ({ role }: { role: "owner" | "admin" }) => {
                   Cancel
                 </Button>
                 <Button type="submit" loading={invite.isPending}>
-                  Send invitation
+                  Create invitation
                 </Button>
               </Group>
             </Stack>
@@ -187,43 +245,109 @@ export const PeoplePage = ({ role }: { role: "owner" | "admin" }) => {
             {invitations.error && (
               <Alert color="red">{invitations.error.message}</Alert>
             )}
-            <Table.ScrollContainer minWidth={480}>
-              <Table>
-                <Table.Thead>
-                  <Table.Tr>
-                    <Table.Th>Email</Table.Th>
-                    <Table.Th>Status</Table.Th>
-                    <Table.Th>Expires</Table.Th>
-                  </Table.Tr>
-                </Table.Thead>
-                <Table.Tbody>
-                  {invitations.data?.invitations.map((invitation) => (
-                    <Table.Tr key={invitation.id}>
-                      <Table.Td>{invitation.email}</Table.Td>
-                      <Table.Td>
-                        <Badge
-                          variant="light"
-                          color={
-                            invitation.status === "accepted"
-                              ? "signal"
-                              : invitation.status === "expired"
-                                ? "gray"
-                                : "brand"
-                          }
-                        >
-                          {invitation.status}
-                        </Badge>
-                      </Table.Td>
-                      <Table.Td>
-                        {new Date(invitation.expiresAt).toLocaleDateString()}
-                      </Table.Td>
+            {invitations.isSuccess &&
+              !invitations.data.invitations.some(
+                (invitation) => invitation.status === "pending",
+              ) && (
+                <Text size="sm" c="dimmed">
+                  No invitations pending.
+                </Text>
+              )}
+            {Boolean(invitations.data?.invitations.length) && (
+              <Table.ScrollContainer minWidth={480}>
+                <Table>
+                  <Table.Thead>
+                    <Table.Tr>
+                      <Table.Th>Email</Table.Th>
+                      <Table.Th>Status</Table.Th>
+                      <Table.Th>Expires</Table.Th>
+                      <Table.Th>Actions</Table.Th>
                     </Table.Tr>
-                  ))}
-                </Table.Tbody>
-              </Table>
-            </Table.ScrollContainer>
+                  </Table.Thead>
+                  <Table.Tbody>
+                    {invitations.data?.invitations.map((invitation) => (
+                      <Table.Tr key={invitation.id}>
+                        <Table.Td>{invitation.email}</Table.Td>
+                        <Table.Td>
+                          <Badge
+                            variant="light"
+                            color={
+                              invitation.status === "accepted"
+                                ? "signal"
+                                : invitation.status === "expired"
+                                  ? "gray"
+                                  : "brand"
+                            }
+                          >
+                            {invitation.status}
+                          </Badge>
+                        </Table.Td>
+                        <Table.Td>
+                          {new Date(invitation.expiresAt).toLocaleDateString()}
+                        </Table.Td>
+                        <Table.Td>
+                          {invitation.status === "pending" && (
+                            <Button
+                              size="xs"
+                              variant="subtle"
+                              color="red"
+                              aria-label={`Revoke invitation for ${invitation.email}`}
+                              onClick={() => {
+                                revoke.reset();
+                                setRevokeTarget(invitation);
+                              }}
+                            >
+                              Revoke
+                            </Button>
+                          )}
+                        </Table.Td>
+                      </Table.Tr>
+                    ))}
+                  </Table.Tbody>
+                </Table>
+              </Table.ScrollContainer>
+            )}
           </Stack>
         </Paper>
+      )}
+      {role === "owner" && (
+        <Modal
+          opened={Boolean(revokeTarget)}
+          title="Revoke invitation"
+          centered
+          onClose={() => setRevokeTarget(undefined)}
+          closeOnClickOutside={!revoke.isPending}
+          closeOnEscape={!revoke.isPending}
+          withCloseButton={!revoke.isPending}
+        >
+          {revokeTarget && (
+            <Stack>
+              <Text size="sm">
+                Revoke the invitation for {revokeTarget.email}? Its link will
+                stop working. You can create a new invitation for this address.
+              </Text>
+              {revoke.error && (
+                <Alert color="red">{revoke.error.message}</Alert>
+              )}
+              <Group justify="flex-end">
+                <Button
+                  variant="subtle"
+                  disabled={revoke.isPending}
+                  onClick={() => setRevokeTarget(undefined)}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  color="red"
+                  loading={revoke.isPending}
+                  onClick={() => revoke.mutate(revokeTarget.id)}
+                >
+                  Revoke invitation
+                </Button>
+              </Group>
+            </Stack>
+          )}
+        </Modal>
       )}
     </Stack>
   );

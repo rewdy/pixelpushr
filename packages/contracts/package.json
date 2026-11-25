@@ -4,13 +4,14 @@
   "type": "module",
   "exports": {
     "./health": "./src/health.ts",
+    "./invitations": "./src/invitations.ts",
     "./errors": "./src/errors.ts",
     "./manifest": "./src/manifest.ts",
     "./media": "./src/media.ts",
     "./pagination": "./src/pagination.ts"
   },
   "scripts": {
-    "build": "bun build src/health.ts src/errors.ts src/manifest.ts src/media.ts src/pagination.ts --outdir dist --target browser",
+    "build": "bun build src/health.ts src/invitations.ts src/errors.ts src/manifest.ts src/media.ts src/pagination.ts --outdir dist --target browser",
     "typecheck": "tsc -p tsconfig.json"
   }
 }
