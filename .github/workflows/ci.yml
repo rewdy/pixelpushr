@@ -100,6 +100,8 @@ jobs:
         with:
           role-to-assume: arn:aws:iam::390847857761:role/pixelpushr-github-deploy
           aws-region: us-east-1
+      - name: Check production prerequisites
+        run: bash scripts/check-production-prerequisites.sh
       - run: terraform -chdir=tf init -input=false -lockfile=readonly
       - run: terraform -chdir=tf plan -input=false -lock-timeout=5m -out=release.tfplan
       - run: terraform -chdir=tf apply -input=false -lock-timeout=5m release.tfplan
@@ -110,6 +112,11 @@ jobs:
             > "$RUNNER_TEMP/migration-status.json"
           jq -e '.StatusCode == 200 and (has("FunctionError") | not)' "$RUNNER_TEMP/migration-status.json"
           jq -e '.migrated == true' "$RUNNER_TEMP/migration.json"
+      - name: Verify API before publishing
+        run: |
+          curl --fail --silent --show-error --retry 5 --retry-all-errors \
+            "$(terraform -chdir=tf output -raw api_health_url)" \
+            | jq -e '.status == "ok" and .service == "api"'
       - name: Publish the web application
         run: |
           web_bucket="$(terraform -chdir=tf output -raw web_bucket)"
