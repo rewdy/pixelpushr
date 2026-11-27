@@ -17,8 +17,8 @@ const item = (id: string): PlayerManifest["activeQueue"][number] => ({
 test("Overview distinguishes simulations from device health and follows override boundaries", async ({
   page,
 }) => {
-  await page.addInitScript(() =>
-    sessionStorage.setItem("pixelpushr-admin-session", "test-token"),
+  await page.route("**/api/admin/**", (route) =>
+    route.fulfill({ status: 404 }),
   );
   await page.route("**/api/admin/me", (route) =>
     route.fulfill({

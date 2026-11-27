@@ -1,29 +1,52 @@
 import { eq } from "drizzle-orm";
 import type { Context } from "hono";
+import { getCookie } from "hono/cookie";
 import type { Database } from "../db/client";
-import { memberships, users } from "../db/schema";
+import { memberships, type users } from "../db/schema";
 import { ApiError } from "../http/errors";
-import type { AuthProvider } from "./provider";
+import { sessionCookieName } from "./sessions";
 
-/** Resolves the authenticated administrator's single-organization membership. */
-export const getAdmin = async (
-  context: Context,
+declare module "hono" {
+  interface ContextVariableMap {
+    admin: {
+      user: typeof users.$inferSelect;
+      membership: typeof memberships.$inferSelect;
+    };
+  }
+}
+
+/** Extracts the opaque browser session credential. */
+export const sessionCredential = (context: Context) =>
+  getCookie(context, sessionCookieName);
+
+/** Checks that the current account still holds workspace membership. */
+export const requireMembership = async (
   db: Database["db"],
-  auth: AuthProvider,
+  user: typeof users.$inferSelect,
 ) => {
-  const header = context.req.header("authorization");
-  if (!header?.startsWith("Bearer "))
-    throw new ApiError(401, "unauthorized", "Administrator session required");
-  const identity = await auth.verify(header.slice(7));
-  const user = await db.query.users.findFirst({
-    where: eq(users.subject, identity.subject),
+  const membership = await db.query.memberships.findFirst({
+    where: eq(memberships.userId, user.id),
   });
-  const membership = user
-    ? await db.query.memberships.findFirst({
-        where: eq(memberships.userId, user.id),
-      })
-    : undefined;
-  if (!user || !membership)
-    throw new ApiError(403, "forbidden", "Administrator membership required");
+  if (!membership)
+    throw new ApiError(
+      403,
+      "membership_required",
+      "This account is not an administrator. Accept an invitation to continue.",
+    );
   return { user, membership };
+};
+
+/** Reads the administrator resolved by the route middleware. */
+export const getAdmin = (context: Context) => context.get("admin");
+
+/** Limits a workspace operation to its owner. */
+export const getOwner = (context: Context) => {
+  const { membership } = getAdmin(context);
+  if (membership.role !== "owner")
+    throw new ApiError(
+      403,
+      "owner_required",
+      "Only the workspace owner can do this.",
+    );
+  return membership;
 };

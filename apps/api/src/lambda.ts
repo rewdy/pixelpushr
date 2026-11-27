@@ -3,9 +3,14 @@ import { createApp } from "./app";
 import { databaseUrlFromEnvironment } from "./config/databaseSecret";
 import { readConfig } from "./config/env";
 import { createRuntime } from "./config/runtime";
+import { sessionKeyFromEnvironment } from "./config/sessionSecret";
 
 const databaseUrl = await databaseUrlFromEnvironment(process.env);
 const runtime = createRuntime(
-  readConfig({ ...process.env, DATABASE_URL: databaseUrl }),
+  readConfig({
+    ...process.env,
+    DATABASE_URL: databaseUrl,
+    SESSION_ENCRYPTION_KEY: await sessionKeyFromEnvironment(process.env),
+  }),
 );
 export const handler = handle(createApp(runtime.dependencies));

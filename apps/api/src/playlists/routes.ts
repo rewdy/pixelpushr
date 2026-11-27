@@ -2,7 +2,6 @@ import { and, asc, eq, inArray, sql } from "drizzle-orm";
 import type { Hono } from "hono";
 import { z } from "zod";
 import { getAdmin } from "../auth/guard";
-import type { AuthProvider } from "../auth/provider";
 import type { Database } from "../db/client";
 import { firstRow } from "../db/rows";
 import {
@@ -20,7 +19,6 @@ import type { MediaStorage } from "../media/storage";
 
 type PlaylistDependencies = {
   db: Database["db"];
-  auth: AuthProvider;
   storage: MediaStorage;
 };
 const playlistSchema = z.object({
@@ -64,10 +62,10 @@ export const validatePlaylistItem = (
 /** Registers playlist CRUD and atomic ordered-item editing. */
 export const registerPlaylistRoutes = (
   app: Hono,
-  { db, auth, storage }: PlaylistDependencies,
+  { db, storage }: PlaylistDependencies,
 ) => {
   app.get("/admin/playlists", async (context) => {
-    const { membership } = await getAdmin(context, db, auth);
+    const { membership } = getAdmin(context);
     const pagination = parsePagination((key) => context.req.query(key));
     const base = db
       .select()
@@ -90,7 +88,7 @@ export const registerPlaylistRoutes = (
   });
 
   app.post("/admin/playlists", async (context) => {
-    const { membership } = await getAdmin(context, db, auth);
+    const { membership } = getAdmin(context);
     const body = await parseJsonBody(context, playlistSchema);
     const playlist = firstRow(
       await db
@@ -102,7 +100,7 @@ export const registerPlaylistRoutes = (
   });
 
   app.get("/admin/playlists/:id", async (context) => {
-    const { membership } = await getAdmin(context, db, auth);
+    const { membership } = getAdmin(context);
     const playlist = await db.query.playlists.findFirst({
       where: and(
         eq(playlists.organizationId, membership.organizationId),
@@ -157,7 +155,7 @@ export const registerPlaylistRoutes = (
   });
 
   app.patch("/admin/playlists/:id", async (context) => {
-    const { membership } = await getAdmin(context, db, auth);
+    const { membership } = getAdmin(context);
     const body = await parseJsonBody(context, playlistSchema);
     const playlist = (
       await db
@@ -176,7 +174,7 @@ export const registerPlaylistRoutes = (
   });
 
   app.put("/admin/playlists/:id/items", async (context) => {
-    const { membership } = await getAdmin(context, db, auth);
+    const { membership } = getAdmin(context);
     const body = await parseJsonBody(context, itemsSchema);
     const playlist = await db.query.playlists.findFirst({
       where: and(
@@ -242,7 +240,7 @@ export const registerPlaylistRoutes = (
   });
 
   app.delete("/admin/playlists/:id", async (context) => {
-    const { membership } = await getAdmin(context, db, auth);
+    const { membership } = getAdmin(context);
     const playlist = await db.query.playlists.findFirst({
       where: and(
         eq(playlists.organizationId, membership.organizationId),

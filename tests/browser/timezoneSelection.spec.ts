@@ -7,9 +7,6 @@ const openSettings = async (
 ) => {
   let timezone = initialTimezone;
   const saved: string[] = [];
-  await page.addInitScript(() =>
-    sessionStorage.setItem("pixelpushr-admin-session", "test-token"),
-  );
   await page.route("**/api/admin/me", (route) =>
     route.fulfill({
       json: {

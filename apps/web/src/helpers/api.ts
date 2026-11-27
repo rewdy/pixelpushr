@@ -1,37 +1,83 @@
-import type { ApiErrorResponse } from "@pixelpushr/contracts/errors";
+import type {
+  ApiErrorCode,
+  ApiErrorResponse,
+} from "@pixelpushr/contracts/errors";
 
-const tokenKey = "pixelpushr-admin-session";
+const legacyTokenKey = "pixelpushr-admin-session";
+export const sessionEndedEvent = "pixelpushr-session-ended";
+let sessionGeneration = 0;
+let sessionSeen = false;
 
-/** Reads the tab-scoped administrator access token. */
-export const getToken = () => sessionStorage.getItem(tokenKey);
+/** Preserves the API error code and HTTP status for the calling screen. */
+export class RequestError extends Error {
+  readonly status: number;
+  readonly code?: ApiErrorCode;
 
-/** Saves or clears the tab-scoped administrator access token. */
-export const setToken = (token: string | null) => {
-  if (token) sessionStorage.setItem(tokenKey, token);
-  else sessionStorage.removeItem(tokenKey);
+  constructor(message: string, status: number, code?: ApiErrorCode) {
+    super(message);
+    this.status = status;
+    this.code = code;
+  }
+}
+
+/** Invalidates requests made under the previous account or session. */
+export const resetSessionState = () => {
+  sessionGeneration++;
+  sessionSeen = false;
+  sessionStorage.removeItem(legacyTokenKey);
 };
 
-/** Sends a JSON request to the API and presents its stable error message. */
+/** Sends a same-origin API request and detects the loss of an established session. */
 export const requestJson = async <T>(
   path: string,
   options: RequestInit = {},
 ): Promise<T> => {
-  const token = getToken();
+  const protectedRequest =
+    path.startsWith("/admin/") ||
+    path === "/auth/session" ||
+    path === "/setup" ||
+    path === "/invitations/accept";
+  const generation = sessionGeneration;
+  const headers = new Headers(options.headers);
+  if (options.body && !headers.has("content-type"))
+    headers.set("content-type", "application/json");
   const response = await fetch(`/api${path}`, {
     ...options,
-    headers: {
-      ...(options.body ? { "content-type": "application/json" } : {}),
-      ...(token ? { authorization: `Bearer ${token}` } : {}),
-      ...options.headers,
-    },
+    headers,
+    credentials: "same-origin",
+    signal: options.signal,
   });
   if (!response.ok) {
     const data = (await response
       .json()
       .catch(() => null)) as ApiErrorResponse | null;
-    throw new Error(
-      data?.error.message ?? `Request failed (${response.status})`,
+    const code = data?.error?.code;
+    if (
+      generation === sessionGeneration &&
+      protectedRequest &&
+      response.status === 401
+    ) {
+      const wasSignedIn =
+        sessionSeen || sessionStorage.getItem(legacyTokenKey) !== null;
+      if (
+        code === "session_ended" ||
+        (code === "session_required" && wasSignedIn)
+      ) {
+        resetSessionState();
+        window.dispatchEvent(new Event(sessionEndedEvent));
+      }
+    }
+    throw new RequestError(
+      data?.error?.message ?? `Request failed (${response.status})`,
+      response.status,
+      code,
     );
   }
-  return response.json() as Promise<T>;
+  const body = (await response.json()) as T;
+  if (protectedRequest) {
+    if (generation !== sessionGeneration)
+      throw new DOMException("Session changed", "AbortError");
+    sessionSeen = true;
+  }
+  return body;
 };

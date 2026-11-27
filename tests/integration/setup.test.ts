@@ -21,12 +21,13 @@ import {
 } from "../../apps/api/src/db/schema";
 import { createLocalStorage } from "../../apps/api/src/media/localStorage";
 import { testDatabaseAdminUrl } from "../config";
+import { browserRequest, loginCookie } from "../fixtures/authRequests";
 
 const adminUrl = testDatabaseAdminUrl;
 const databaseName = `pixelpushr_test_${crypto.randomUUID().replaceAll("-", "")}`;
 let admin: ReturnType<typeof postgres>;
 let connection: ReturnType<typeof createDatabase>;
-let app: ReturnType<typeof createApp>;
+let request: ReturnType<typeof browserRequest>;
 let mediaDirectory: string;
 let readyImageId: string;
 let readyPlaylistId: string;
@@ -36,12 +37,12 @@ let stalledEmail:
   | { signal: AbortSignal; reject: (error: Error) => void }
   | undefined;
 
-const sendInvitationEmail = (accessToken: string, url: string) =>
-  app.request("/admin/invitations/email", {
+const sendInvitationEmail = (sessionCookie: string, url: string) =>
+  request("/admin/invitations/email", {
     method: "POST",
     headers: {
       "content-type": "application/json",
-      authorization: `Bearer ${accessToken}`,
+      cookie: sessionCookie,
     },
     body: JSON.stringify({ token: new URL(url).pathname.split("/").at(-1) }),
   });
@@ -63,28 +64,30 @@ describe("first-run organization setup", () => {
       "http://127.0.0.1:5173",
       "test-secret-longer-than-thirty-two-characters",
     );
-    app = createApp({
-      db: connection.db,
-      auth: createLocalAuth(
-        connection.db,
-        "test-secret-longer-than-thirty-two-characters",
-      ),
-      mailer: {
-        send: async (email, url, signal) => {
-          sentInvitations.push({ email, url });
-          if (email === "new-admin@example.com")
-            throw new Error("Provider rejected submission");
-          if (email === "stalled@example.com") {
-            return new Promise<void>((_resolve, reject) => {
-              stalledEmail = { signal, reject };
-            });
-          }
+    request = browserRequest(
+      createApp({
+        db: connection.db,
+        auth: createLocalAuth(
+          connection.db,
+          "test-secret-longer-than-thirty-two-characters",
+        ),
+        mailer: {
+          send: async (email, url, signal) => {
+            sentInvitations.push({ email, url });
+            if (email === "new-admin@example.com")
+              throw new Error("Provider rejected submission");
+            if (email === "stalled@example.com") {
+              return new Promise<void>((_resolve, reject) => {
+                stalledEmail = { signal, reject };
+              });
+            }
+          },
         },
-      },
-      publicWebUrl: "http://127.0.0.1:5173",
-      initialOwnerEmail: "owner@example.com",
-      storage: mediaStorage,
-    });
+        publicWebUrl: "http://127.0.0.1:5173",
+        initialOwnerEmail: "owner@example.com",
+        storage: mediaStorage,
+      }),
+    );
   });
 
   afterAll(async () => {
@@ -101,33 +104,35 @@ describe("first-run organization setup", () => {
       email: "other@example.com",
       password: "super-long-password",
     };
-    const request = {
+    const credentialsRequest = {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(credentials),
     };
-    expect((await app.request("/auth/register", request)).status).toBe(201);
-    const login = await app.request("/auth/login", request);
+    expect((await request("/auth/register", credentialsRequest)).status).toBe(
+      201,
+    );
+    const login = await request("/auth/login", credentialsRequest);
     expect(login.status).toBe(200);
-    const { accessToken } = (await login.json()) as { accessToken: string };
-    const setup = await app.request("/setup", {
+    const sessionCookie = loginCookie(login);
+    const setup = await request("/setup", {
       method: "POST",
       headers: {
-        ...request.headers,
-        authorization: `Bearer ${accessToken}`,
+        ...credentialsRequest.headers,
+        cookie: sessionCookie,
       },
       body: JSON.stringify({ name: "Other", timezone: "America/Chicago" }),
     });
     expect(setup.status).toBe(403);
-    expect(await (await app.request("/setup/status")).json()).toEqual({
+    expect(await (await request("/setup/status")).json()).toEqual({
       setupRequired: true,
     });
   });
 
   test("designated account becomes owner and second setup is rejected", async () => {
-    const status = await app.request("/setup/status");
+    const status = await request("/setup/status");
     expect(await status.json()).toEqual({ setupRequired: true });
-    const registered = await app.request("/auth/register", {
+    const registered = await request("/auth/register", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
@@ -136,7 +141,7 @@ describe("first-run organization setup", () => {
       }),
     });
     expect(registered.status).toBe(201);
-    const login = await app.request("/auth/login", {
+    const login = await request("/auth/login", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
@@ -144,30 +149,30 @@ describe("first-run organization setup", () => {
         password: "super-long-password",
       }),
     });
-    const session = (await login.json()) as { accessToken: string };
+    const session = loginCookie(login);
     expect(login.status).toBe(200);
     const payload = { name: "First Community", timezone: "America/Chicago" };
-    const setup = await app.request("/setup", {
+    const setup = await request("/setup", {
       method: "POST",
       headers: {
         "content-type": "application/json",
-        authorization: `Bearer ${session.accessToken}`,
+        cookie: session,
       },
       body: JSON.stringify(payload),
     });
     expect(setup.status).toBe(201);
-    const me = await app.request("/admin/me", {
-      headers: { authorization: `Bearer ${session.accessToken}` },
+    const me = await request("/admin/me", {
+      headers: { cookie: session },
     });
     expect(me.status).toBe(200);
     expect(
       ((await me.json()) as { membership: { role: string } }).membership.role,
     ).toBe("owner");
-    const second = await app.request("/setup", {
+    const second = await request("/setup", {
       method: "POST",
       headers: {
         "content-type": "application/json",
-        authorization: `Bearer ${session.accessToken}`,
+        cookie: session,
       },
       body: JSON.stringify(payload),
     });
@@ -181,18 +186,18 @@ describe("first-run organization setup", () => {
   });
 
   test("unauthenticated admin access is denied", async () => {
-    const response = await app.request("/admin/me");
+    const response = await request("/admin/me");
     expect(response.status).toBe(401);
     expect(await response.json()).toEqual({
       error: {
-        code: "unauthorized",
-        message: "Administrator session required",
+        code: "session_required",
+        message: "Sign in to continue.",
       },
     });
   });
 
   test("owner invites an admin, rejects duplicates, and recipient accepts", async () => {
-    const ownerLogin = await app.request("/auth/login", {
+    const ownerLogin = await request("/auth/login", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
@@ -200,14 +205,13 @@ describe("first-run organization setup", () => {
         password: "super-long-password",
       }),
     });
-    const ownerToken = ((await ownerLogin.json()) as { accessToken: string })
-      .accessToken;
+    const ownerToken = loginCookie(ownerLogin);
     const invite = () =>
-      app.request("/admin/invitations", {
+      request("/admin/invitations", {
         method: "POST",
         headers: {
           "content-type": "application/json",
-          authorization: `Bearer ${ownerToken}`,
+          cookie: ownerToken,
         },
         body: JSON.stringify({ email: "new-admin@example.com" }),
       });
@@ -229,7 +233,7 @@ describe("first-run organization setup", () => {
     );
     const duplicate = await invite();
     expect(duplicate.status).toBe(409);
-    const registered = await app.request("/auth/register", {
+    const registered = await request("/auth/register", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
@@ -238,7 +242,7 @@ describe("first-run organization setup", () => {
       }),
     });
     expect(registered.status).toBe(201);
-    const adminLogin = await app.request("/auth/login", {
+    const adminLogin = await request("/auth/login", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
@@ -246,21 +250,20 @@ describe("first-run organization setup", () => {
         password: "another-long-password",
       }),
     });
-    const adminToken = ((await adminLogin.json()) as { accessToken: string })
-      .accessToken;
+    const adminToken = loginCookie(adminLogin);
     const token = invitationBody.url.split("/").at(-1);
     if (!token) throw new Error("Invitation URL has no token");
-    const accept = (accessToken: string) =>
-      app.request("/invitations/accept", {
+    const accept = (sessionCookie: string) =>
+      request("/invitations/accept", {
         method: "POST",
         headers: {
           "content-type": "application/json",
-          authorization: `Bearer ${accessToken}`,
+          cookie: sessionCookie,
         },
         body: JSON.stringify({ token }),
       });
-    const listed = await app.request("/admin/invitations", {
-      headers: { authorization: `Bearer ${ownerToken}` },
+    const listed = await request("/admin/invitations", {
+      headers: { cookie: ownerToken },
     });
     const list = (await listed.json()) as {
       invitations: Record<string, unknown>[];
@@ -275,8 +278,8 @@ describe("first-run organization setup", () => {
     expect((await accept(ownerToken)).status).toBe(403);
     const accepted = await accept(adminToken);
     expect(accepted.status).toBe(200);
-    const me = await app.request("/admin/me", {
-      headers: { authorization: `Bearer ${adminToken}` },
+    const me = await request("/admin/me", {
+      headers: { cookie: adminToken },
     });
     expect(
       ((await me.json()) as { membership: { role: string } }).membership.role,
@@ -285,20 +288,17 @@ describe("first-run organization setup", () => {
     expect(repeat.status).toBe(409);
     expect(
       (
-        await app.request(
-          `/admin/invitations/${invitationBody.invitation.id}`,
-          {
-            method: "DELETE",
-            headers: { authorization: `Bearer ${ownerToken}` },
-          },
-        )
+        await request(`/admin/invitations/${invitationBody.invitation.id}`, {
+          method: "DELETE",
+          headers: { cookie: ownerToken },
+        })
       ).status,
     ).toBe(404);
-    const unauthorized = await app.request("/admin/invitations", {
+    const unauthorized = await request("/admin/invitations", {
       method: "POST",
       headers: {
         "content-type": "application/json",
-        authorization: `Bearer ${adminToken}`,
+        cookie: adminToken,
       },
       body: JSON.stringify({ email: "other-invite@example.com" }),
     });
@@ -322,13 +322,13 @@ describe("first-run organization setup", () => {
 
   test("only the owner can revoke a pending invitation and reissue it", async () => {
     const login = async (email: string, password: string) => {
-      const response = await app.request("/auth/login", {
+      const response = await request("/auth/login", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ email, password }),
       });
       expect(response.status).toBe(200);
-      return ((await response.json()) as { accessToken: string }).accessToken;
+      return loginCookie(response);
     };
     const owner = await login("owner@example.com", "super-long-password");
     const administrator = await login(
@@ -337,10 +337,10 @@ describe("first-run organization setup", () => {
     );
     const headers = {
       "content-type": "application/json",
-      authorization: `Bearer ${owner}`,
+      cookie: owner,
     };
     const create = () =>
-      app.request("/admin/invitations", {
+      request("/admin/invitations", {
         method: "POST",
         headers,
         body: JSON.stringify({ email: "lost-link@example.com" }),
@@ -348,10 +348,10 @@ describe("first-run organization setup", () => {
     const response = await create();
     expect(response.status).toBe(201);
     const original = (await response.json()) as CreateInvitationResponse;
-    const revoke = (id: string, accessToken: string) =>
-      app.request(`/admin/invitations/${id}`, {
+    const revoke = (id: string, sessionCookie: string) =>
+      request(`/admin/invitations/${id}`, {
         method: "DELETE",
-        headers: { authorization: `Bearer ${accessToken}` },
+        headers: { cookie: sessionCookie },
       });
     expect((await revoke("invalid", owner)).status).toBe(400);
     expect((await revoke(original.invitation.id, administrator)).status).toBe(
@@ -365,14 +365,14 @@ describe("first-run organization setup", () => {
     expect(
       ((await replacement.json()) as CreateInvitationResponse).url,
     ).not.toBe(original.url);
-    const listed = await app.request("/admin/invitations", { headers });
+    const listed = await request("/admin/invitations", { headers });
     const { invitations: listedInvitations } = (await listed.json()) as {
       invitations: { id: string }[];
     };
     expect(
       listedInvitations.some(({ id }) => id === original.invitation.id),
     ).toBe(false);
-    const accept = await app.request("/invitations/accept", {
+    const accept = await request("/invitations/accept", {
       method: "POST",
       headers,
       body: JSON.stringify({
@@ -384,7 +384,7 @@ describe("first-run organization setup", () => {
   });
 
   test("expired invitation cannot be accepted and is reported expired", async () => {
-    const ownerLogin = await app.request("/auth/login", {
+    const ownerLogin = await request("/auth/login", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
@@ -392,13 +392,12 @@ describe("first-run organization setup", () => {
         password: "super-long-password",
       }),
     });
-    const ownerToken = ((await ownerLogin.json()) as { accessToken: string })
-      .accessToken;
-    const invitation = await app.request("/admin/invitations", {
+    const ownerToken = loginCookie(ownerLogin);
+    const invitation = await request("/admin/invitations", {
       method: "POST",
       headers: {
         "content-type": "application/json",
-        authorization: `Bearer ${ownerToken}`,
+        cookie: ownerToken,
       },
       body: JSON.stringify({ email: "expired@example.com" }),
     });
@@ -420,7 +419,7 @@ describe("first-run organization setup", () => {
       .update(invitations)
       .set({ expiresAt: new Date(Date.now() - 1000) })
       .where(eq(invitations.id, record.id));
-    const registered = await app.request("/auth/register", {
+    const registered = await request("/auth/register", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
@@ -429,8 +428,8 @@ describe("first-run organization setup", () => {
       }),
     });
     expect(registered.status).toBe(403);
-    const listed = await app.request("/admin/invitations", {
-      headers: { authorization: `Bearer ${ownerToken}` },
+    const listed = await request("/admin/invitations", {
+      headers: { cookie: ownerToken },
     });
     const listedBody = (await listed.json()) as {
       invitations: { id: string; status: string }[];
@@ -438,20 +437,20 @@ describe("first-run organization setup", () => {
     expect(
       listedBody.invitations.find((item) => item.id === record.id)?.status,
     ).toBe("expired");
-    const accept = await app.request("/invitations/accept", {
+    const accept = await request("/invitations/accept", {
       method: "POST",
       headers: {
         "content-type": "application/json",
-        authorization: `Bearer ${ownerToken}`,
+        cookie: ownerToken,
       },
       body: JSON.stringify({ token: url.split("/").at(-1) }),
     });
     expect(accept.status).toBe(410);
     expect(
       (
-        await app.request(`/admin/invitations/${record.id}`, {
+        await request(`/admin/invitations/${record.id}`, {
           method: "DELETE",
-          headers: { authorization: `Bearer ${ownerToken}` },
+          headers: { cookie: ownerToken },
         })
       ).status,
     ).toBe(404);
@@ -462,7 +461,7 @@ describe("first-run organization setup", () => {
   });
 
   test("a stalled optional mail attempt reaches its deadline independently of creation", async () => {
-    const ownerLogin = await app.request("/auth/login", {
+    const ownerLogin = await request("/auth/login", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
@@ -470,21 +469,19 @@ describe("first-run organization setup", () => {
         password: "super-long-password",
       }),
     });
-    const { accessToken } = (await ownerLogin.json()) as {
-      accessToken: string;
-    };
-    const response = await app.request("/admin/invitations", {
+    const sessionCookie = loginCookie(ownerLogin);
+    const response = await request("/admin/invitations", {
       method: "POST",
       headers: {
         "content-type": "application/json",
-        authorization: `Bearer ${accessToken}`,
+        cookie: sessionCookie,
       },
       body: JSON.stringify({ email: "stalled@example.com" }),
     });
     expect(response.status).toBe(201);
     const body = (await response.json()) as CreateInvitationResponse;
     expect(stalledEmail).toBeUndefined();
-    const emailResponse = await sendInvitationEmail(accessToken, body.url);
+    const emailResponse = await sendInvitationEmail(sessionCookie, body.url);
     expect(emailResponse.status).toBe(200);
     expect((await emailResponse.json()) as SendInvitationEmailResponse).toEqual(
       {
@@ -499,7 +496,7 @@ describe("first-run organization setup", () => {
   }, 10_000);
 
   test("supported upload becomes ready and unsupported upload stays failed", async () => {
-    const ownerLogin = await app.request("/auth/login", {
+    const ownerLogin = await request("/auth/login", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
@@ -507,13 +504,12 @@ describe("first-run organization setup", () => {
         password: "super-long-password",
       }),
     });
-    const ownerToken = ((await ownerLogin.json()) as { accessToken: string })
-      .accessToken;
+    const ownerToken = loginCookie(ownerLogin);
     const headers = {
       "content-type": "application/json",
-      authorization: `Bearer ${ownerToken}`,
+      cookie: ownerToken,
     };
-    const bad = await app.request("/admin/media/uploads", {
+    const bad = await request("/admin/media/uploads", {
       method: "POST",
       headers,
       body: JSON.stringify({
@@ -530,7 +526,7 @@ describe("first-run organization setup", () => {
     expect(badBody.asset.status).toBe("failed");
     expect(badBody.uploadUrl).toBeNull();
     const png = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10, 1, 2, 3, 4]);
-    const created = await app.request("/admin/media/uploads", {
+    const created = await request("/admin/media/uploads", {
       method: "POST",
       headers,
       body: JSON.stringify({
@@ -546,12 +542,12 @@ describe("first-run organization setup", () => {
     readyImageId = asset.id;
     expect(asset.status).toBe("pending");
     const url = new URL(uploadUrl);
-    const uploaded = await app.request(
+    const uploaded = await request(
       url.pathname.replace(/^\/api/, "") + url.search,
       { method: "PUT", headers: { "content-type": "image/png" }, body: png },
     );
     expect(uploaded.status).toBe(200);
-    const completed = await app.request(`/admin/media/${asset.id}/complete`, {
+    const completed = await request(`/admin/media/${asset.id}/complete`, {
       method: "POST",
       headers,
       body: JSON.stringify({ width: 1, height: 1 }),
@@ -561,15 +557,15 @@ describe("first-run organization setup", () => {
       ((await completed.json()) as { asset: { status: string; width: number } })
         .asset,
     ).toMatchObject({ status: "ready", width: 1 });
-    const list = await app.request("/admin/media", {
-      headers: { authorization: `Bearer ${ownerToken}` },
+    const list = await request("/admin/media", {
+      headers: { cookie: ownerToken },
     });
     expect(
       ((await list.json()) as { assets: { status: string }[] }).assets.map(
         (item) => item.status,
       ),
     ).toContain("ready");
-    const forged = await app.request("/admin/media/uploads", {
+    const forged = await request("/admin/media/uploads", {
       method: "POST",
       headers,
       body: JSON.stringify({
@@ -583,15 +579,12 @@ describe("first-run organization setup", () => {
       uploadUrl: string;
     };
     const forgedUrl = new URL(forgedBody.uploadUrl);
-    await app.request(
-      forgedUrl.pathname.replace(/^\/api/, "") + forgedUrl.search,
-      {
-        method: "PUT",
-        headers: { "content-type": "image/png" },
-        body: new Uint8Array([37, 80, 68, 70]),
-      },
-    );
-    const forgedComplete = await app.request(
+    await request(forgedUrl.pathname.replace(/^\/api/, "") + forgedUrl.search, {
+      method: "PUT",
+      headers: { "content-type": "image/png" },
+      body: new Uint8Array([37, 80, 68, 70]),
+    });
+    const forgedComplete = await request(
       `/admin/media/${forgedBody.asset.id}/complete`,
       { method: "POST", headers, body: "{}" },
     );
@@ -599,7 +592,7 @@ describe("first-run organization setup", () => {
       ((await forgedComplete.json()) as { asset: { status: string } }).asset
         .status,
     ).toBe("failed");
-    const oversize = await app.request("/admin/media/uploads", {
+    const oversize = await request("/admin/media/uploads", {
       method: "POST",
       headers,
       body: JSON.stringify({
@@ -614,7 +607,7 @@ describe("first-run organization setup", () => {
   });
 
   test("ready video thumbnails validate uploads, serialize, and clean up", async () => {
-    const login = await app.request("/auth/login", {
+    const login = await request("/auth/login", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
@@ -622,12 +615,12 @@ describe("first-run organization setup", () => {
         password: "super-long-password",
       }),
     });
-    const token = ((await login.json()) as { accessToken: string }).accessToken;
-    const headers = { authorization: `Bearer ${token}` };
+    const token = loginCookie(login);
+    const headers = { cookie: token };
     const mp4 = new Uint8Array([
       0, 0, 0, 16, 102, 116, 121, 112, 105, 115, 111, 109, 0, 0, 0, 0,
     ]);
-    const created = await app.request("/admin/media/uploads", {
+    const created = await request("/admin/media/uploads", {
       method: "POST",
       headers: { ...headers, "content-type": "application/json" },
       body: JSON.stringify({
@@ -643,17 +636,14 @@ describe("first-run organization setup", () => {
     const upload = new URL(uploadUrl);
     expect(
       (
-        await app.request(
-          upload.pathname.replace(/^\/api/, "") + upload.search,
-          {
-            method: "PUT",
-            headers: { "content-type": "video/mp4" },
-            body: mp4,
-          },
-        )
+        await request(upload.pathname.replace(/^\/api/, "") + upload.search, {
+          method: "PUT",
+          headers: { "content-type": "video/mp4" },
+          body: mp4,
+        })
       ).status,
     ).toBe(200);
-    const completed = await app.request(`/admin/media/${asset.id}/complete`, {
+    const completed = await request(`/admin/media/${asset.id}/complete`, {
       method: "POST",
       headers: { ...headers, "content-type": "application/json" },
       body: JSON.stringify({ width: 640, height: 360, durationMs: 5000 }),
@@ -666,24 +656,23 @@ describe("first-run organization setup", () => {
       ...headers,
       "x-media-version": completedAsset.asset.contentVersion,
     };
-    const playlist = await app.request("/admin/playlists", {
+    const playlist = await request("/admin/playlists", {
       method: "POST",
       headers: { ...headers, "content-type": "application/json" },
       body: JSON.stringify({ name: "Thumbnail test" }),
     });
     const playlistId = ((await playlist.json()) as { playlist: { id: string } })
       .playlist.id;
-    await app.request(`/admin/playlists/${playlistId}/items`, {
+    await request(`/admin/playlists/${playlistId}/items`, {
       method: "PUT",
       headers: { ...headers, "content-type": "application/json" },
       body: JSON.stringify({
         items: [{ mediaAssetId: asset.id, videoMode: "once" }],
       }),
     });
-    const withoutThumbnail = await app.request(
-      `/admin/playlists/${playlistId}`,
-      { headers },
-    );
+    const withoutThumbnail = await request(`/admin/playlists/${playlistId}`, {
+      headers,
+    });
     expect(
       (
         (await withoutThumbnail.json()) as {
@@ -696,7 +685,7 @@ describe("first-run organization setup", () => {
     const jpeg = new Uint8Array([255, 216, 255, 224, 0, 1, 255, 217]);
     expect(
       (
-        await app.request(endpoint, {
+        await request(endpoint, {
           method: "PUT",
           headers: { "content-type": "image/jpeg" },
           body: jpeg,
@@ -705,7 +694,7 @@ describe("first-run organization setup", () => {
     ).toBe(401);
     expect(
       (
-        await app.request(
+        await request(
           "/admin/media/00000000-0000-0000-0000-000000000000/thumbnail",
           {
             method: "PUT",
@@ -717,7 +706,7 @@ describe("first-run organization setup", () => {
     ).toBe(404);
     expect(
       (
-        await app.request(`/admin/media/${readyImageId}/thumbnail`, {
+        await request(`/admin/media/${readyImageId}/thumbnail`, {
           method: "PUT",
           headers: { ...headers, "content-type": "image/jpeg" },
           body: jpeg,
@@ -726,7 +715,7 @@ describe("first-run organization setup", () => {
     ).toBe(409);
     expect(
       (
-        await app.request(endpoint, {
+        await request(endpoint, {
           method: "PUT",
           headers: { ...versionHeaders, "content-type": "image/png" },
           body: jpeg,
@@ -735,7 +724,7 @@ describe("first-run organization setup", () => {
     ).toBe(400);
     expect(
       (
-        await app.request(endpoint, {
+        await request(endpoint, {
           method: "PUT",
           headers: { ...versionHeaders, "content-type": "image/jpeg" },
           body: new Uint8Array([1, 2, 3]),
@@ -744,14 +733,14 @@ describe("first-run organization setup", () => {
     ).toBe(400);
     expect(
       (
-        await app.request(endpoint, {
+        await request(endpoint, {
           method: "PUT",
           headers: { ...versionHeaders, "content-type": "image/jpeg" },
           body: new Uint8Array(1024 * 1024 + 1),
         })
       ).status,
     ).toBe(413);
-    const thumbnail = await app.request(endpoint, {
+    const thumbnail = await request(endpoint, {
       method: "PUT",
       headers: { ...versionHeaders, "content-type": "image/jpeg" },
       body: jpeg,
@@ -766,28 +755,28 @@ describe("first-run organization setup", () => {
     expect((await mediaStorage.head(thumbAsset.thumbnailKey))?.sizeBytes).toBe(
       jpeg.length,
     );
-    const list = await app.request("/admin/media", { headers });
+    const list = await request("/admin/media", { headers });
     const listed = (
       (await list.json()) as {
         assets: { id: string; previewUrl: string | null }[];
       }
     ).assets.find((item) => item.id === asset.id);
     expect(listed?.previewUrl).toBe(thumbAsset.previewUrl);
-    const detail = await app.request(`/admin/playlists/${playlistId}`, {
+    const detail = await request(`/admin/playlists/${playlistId}`, {
       headers,
     });
     expect(
       ((await detail.json()) as { items: { asset: { previewUrl: string } }[] })
         .items[0]?.asset.previewUrl,
     ).toBe(thumbAsset.previewUrl);
-    await app.request(`/admin/playlists/${playlistId}/items`, {
+    await request(`/admin/playlists/${playlistId}/items`, {
       method: "PUT",
       headers: { ...headers, "content-type": "application/json" },
       body: JSON.stringify({ items: [] }),
     });
     expect(
       (
-        await app.request(`/admin/media/${asset.id}`, {
+        await request(`/admin/media/${asset.id}`, {
           method: "DELETE",
           headers,
         })
@@ -797,7 +786,7 @@ describe("first-run organization setup", () => {
   });
 
   test("playlist item order and playback settings survive reload", async () => {
-    const ownerLogin = await app.request("/auth/login", {
+    const ownerLogin = await request("/auth/login", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
@@ -805,13 +794,12 @@ describe("first-run organization setup", () => {
         password: "super-long-password",
       }),
     });
-    const ownerToken = ((await ownerLogin.json()) as { accessToken: string })
-      .accessToken;
+    const ownerToken = loginCookie(ownerLogin);
     const headers = {
       "content-type": "application/json",
-      authorization: `Bearer ${ownerToken}`,
+      cookie: ownerToken,
     };
-    const created = await app.request("/admin/playlists", {
+    const created = await request("/admin/playlists", {
       method: "POST",
       headers,
       body: JSON.stringify({ name: "Brand loop" }),
@@ -824,14 +812,14 @@ describe("first-run organization setup", () => {
       { mediaAssetId: readyImageId, imageDurationMs: 8000 },
       { mediaAssetId: readyImageId, imageDurationMs: 3000 },
     ];
-    const saved = await app.request(`/admin/playlists/${playlistId}/items`, {
+    const saved = await request(`/admin/playlists/${playlistId}/items`, {
       method: "PUT",
       headers,
       body: JSON.stringify({ items }),
     });
     expect(saved.status).toBe(200);
-    const reloaded = await app.request(`/admin/playlists/${playlistId}`, {
-      headers: { authorization: `Bearer ${ownerToken}` },
+    const reloaded = await request(`/admin/playlists/${playlistId}`, {
+      headers: { cookie: ownerToken },
     });
     expect(
       (
@@ -846,7 +834,7 @@ describe("first-run organization setup", () => {
       { position: 0, imageDurationMs: 8000 },
       { position: 1, imageDurationMs: 3000 },
     ]);
-    const invalidDuration = await app.request(
+    const invalidDuration = await request(
       `/admin/playlists/${playlistId}/items`,
       {
         method: "PUT",
@@ -857,21 +845,18 @@ describe("first-run organization setup", () => {
       },
     );
     expect(invalidDuration.status).toBe(400);
-    const unavailable = await app.request(
-      `/admin/playlists/${playlistId}/items`,
-      {
-        method: "PUT",
-        headers,
-        body: JSON.stringify({
-          items: [{ mediaAssetId: crypto.randomUUID(), imageDurationMs: 5000 }],
-        }),
-      },
-    );
+    const unavailable = await request(`/admin/playlists/${playlistId}/items`, {
+      method: "PUT",
+      headers,
+      body: JSON.stringify({
+        items: [{ mediaAssetId: crypto.randomUUID(), imageDurationMs: 5000 }],
+      }),
+    });
     expect(unavailable.status).toBe(400);
   });
 
   test("display URLs are distinct and always playlists form an ordered manifest", async () => {
-    const ownerLogin = await app.request("/auth/login", {
+    const ownerLogin = await request("/auth/login", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
@@ -879,14 +864,13 @@ describe("first-run organization setup", () => {
         password: "super-long-password",
       }),
     });
-    const ownerToken = ((await ownerLogin.json()) as { accessToken: string })
-      .accessToken;
+    const ownerToken = loginCookie(ownerLogin);
     const headers = {
       "content-type": "application/json",
-      authorization: `Bearer ${ownerToken}`,
+      cookie: ownerToken,
     };
     const createDisplay = (name: string) =>
-      app.request("/admin/displays", {
+      request("/admin/displays", {
         method: "POST",
         headers,
         body: JSON.stringify({ name }),
@@ -902,7 +886,7 @@ describe("first-run organization setup", () => {
       }
     ).display;
     expect(first.playerUrl).not.toBe(second.playerUrl);
-    const extraPlaylist = await app.request("/admin/playlists", {
+    const extraPlaylist = await request("/admin/playlists", {
       method: "POST",
       headers,
       body: JSON.stringify({ name: "Campaign" }),
@@ -910,14 +894,14 @@ describe("first-run organization setup", () => {
     const extraId = (
       (await extraPlaylist.json()) as { playlist: { id: string } }
     ).playlist.id;
-    await app.request(`/admin/playlists/${extraId}/items`, {
+    await request(`/admin/playlists/${extraId}/items`, {
       method: "PUT",
       headers,
       body: JSON.stringify({
         items: [{ mediaAssetId: readyImageId, imageDurationMs: 5000 }],
       }),
     });
-    const assigned = await app.request(`/admin/displays/${first.id}/always`, {
+    const assigned = await request(`/admin/displays/${first.id}/always`, {
       method: "PUT",
       headers,
       body: JSON.stringify({ playlistIds: [readyPlaylistId, extraId] }),
@@ -925,7 +909,7 @@ describe("first-run organization setup", () => {
     expect(assigned.status).toBe(200);
     const token = first.playerUrl.split("/").at(-1);
     if (!token) throw new Error("Player URL has no token");
-    const manifestResponse = await app.request(`/player/${token}/manifest`);
+    const manifestResponse = await request(`/player/${token}/manifest`);
     expect(manifestResponse.status).toBe(200);
     const manifest = (await manifestResponse.json()) as {
       normalQueue: { playlistId: string; imageDurationMs: number }[];
@@ -940,9 +924,9 @@ describe("first-run organization setup", () => {
       [readyPlaylistId, 3000],
       [extraId, 5000],
     ]);
-    const missing = await app.request("/player/unknown/manifest");
+    const missing = await request("/player/unknown/manifest");
     expect(missing.status).toBe(404);
-    const heartbeat = await app.request(`/player/${token}/heartbeat`, {
+    const heartbeat = await request(`/player/${token}/heartbeat`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
@@ -951,8 +935,8 @@ describe("first-run organization setup", () => {
       }),
     });
     expect(heartbeat.status).toBe(200);
-    const listed = await app.request("/admin/displays", {
-      headers: { authorization: `Bearer ${ownerToken}` },
+    const listed = await request("/admin/displays", {
+      headers: { cookie: ownerToken },
     });
     const listedBody = (await listed.json()) as {
       displays: { id: string; lastSeenAt: string | null }[];
@@ -964,7 +948,7 @@ describe("first-run organization setup", () => {
   });
 
   test("additive schedules combine ordered playlists and rotate across three weeks", async () => {
-    const ownerLogin = await app.request("/auth/login", {
+    const ownerLogin = await request("/auth/login", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
@@ -972,27 +956,26 @@ describe("first-run organization setup", () => {
         password: "super-long-password",
       }),
     });
-    const ownerToken = ((await ownerLogin.json()) as { accessToken: string })
-      .accessToken;
+    const ownerToken = loginCookie(ownerLogin);
     const headers = {
       "content-type": "application/json",
-      authorization: `Bearer ${ownerToken}`,
+      cookie: ownerToken,
     };
-    const created = await app.request("/admin/displays", {
+    const created = await request("/admin/displays", {
       method: "POST",
       headers,
       body: JSON.stringify({ name: "Rotating display" }),
     });
     const displayId = ((await created.json()) as { display: { id: string } })
       .display.id;
-    await app.request(`/admin/displays/${displayId}/always`, {
+    await request(`/admin/displays/${displayId}/always`, {
       method: "PUT",
       headers,
       body: JSON.stringify({ playlistIds: [readyPlaylistId] }),
     });
     const campaigns: string[] = [];
     for (let index = 0; index < 3; index += 1) {
-      const playlistResponse = await app.request("/admin/playlists", {
+      const playlistResponse = await request("/admin/playlists", {
         method: "POST",
         headers,
         body: JSON.stringify({ name: `Campaign ${index + 1}` }),
@@ -1001,7 +984,7 @@ describe("first-run organization setup", () => {
         (await playlistResponse.json()) as { playlist: { id: string } }
       ).playlist.id;
       campaigns.push(playlistId);
-      await app.request(`/admin/playlists/${playlistId}/items`, {
+      await request(`/admin/playlists/${playlistId}/items`, {
         method: "PUT",
         headers,
         body: JSON.stringify({
@@ -1009,7 +992,7 @@ describe("first-run organization setup", () => {
         }),
       });
       const day = 7 + index * 7;
-      const scheduled = await app.request(
+      const scheduled = await request(
         `/admin/displays/${displayId}/schedules`,
         {
           method: "POST",
@@ -1032,7 +1015,7 @@ describe("first-run organization setup", () => {
       ["2026-09-22T12:00", campaigns[2]],
       ["2026-09-29T12:00", campaigns[0]],
     ] as const) {
-      const preview = await app.request(
+      const preview = await request(
         `/admin/displays/${displayId}/preview?atLocal=${atLocal}`,
         { headers },
       );
@@ -1044,24 +1027,21 @@ describe("first-run organization setup", () => {
         ...new Set(manifest.normalQueue.map((item) => item.playlistId)),
       ]).toEqual([readyPlaylistId, expected]);
     }
-    const overlap = await app.request(
-      `/admin/displays/${displayId}/schedules`,
-      {
-        method: "POST",
-        headers,
-        body: JSON.stringify({
-          playlistId: campaigns[2],
-          startLocal: "2026-09-08T10:00",
-          endLocal: "2026-09-08T14:00",
-          recurrence: "none",
-          position: 3,
-        }),
-      },
-    );
+    const overlap = await request(`/admin/displays/${displayId}/schedules`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        playlistId: campaigns[2],
+        startLocal: "2026-09-08T10:00",
+        endLocal: "2026-09-08T14:00",
+        recurrence: "none",
+        position: 3,
+      }),
+    });
     expect(overlap.status).toBe(201);
     const overlapId = ((await overlap.json()) as { assignment: { id: string } })
       .assignment.id;
-    const overlapping = await app.request(
+    const overlapping = await request(
       `/admin/displays/${displayId}/preview?atLocal=2026-09-08T12:00`,
       { headers },
     );
@@ -1074,26 +1054,23 @@ describe("first-run organization setup", () => {
         ).normalQueue.map((item) => item.playlistId),
       ),
     ]).toEqual([readyPlaylistId, campaigns[0], campaigns[2]]);
-    const removed = await app.request(
+    const removed = await request(
       `/admin/displays/${displayId}/schedules/${overlapId}`,
       { method: "DELETE", headers },
     );
     expect(removed.status).toBe(200);
-    const invalid = await app.request(
-      `/admin/displays/${displayId}/schedules`,
-      {
-        method: "POST",
-        headers,
-        body: JSON.stringify({
-          playlistId: campaigns[0],
-          startLocal: "2026-09-09T12:00",
-          endLocal: "2026-09-08T12:00",
-          recurrence: "none",
-        }),
-      },
-    );
+    const invalid = await request(`/admin/displays/${displayId}/schedules`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        playlistId: campaigns[0],
+        startLocal: "2026-09-09T12:00",
+        endLocal: "2026-09-08T12:00",
+        recurrence: "none",
+      }),
+    });
     expect(invalid.status).toBe(400);
-    const empty = await app.request(
+    const empty = await request(
       `/admin/displays/${displayId}/preview?atLocal=2026-09-01T12:00`,
       { headers },
     );
@@ -1110,7 +1087,7 @@ describe("first-run organization setup", () => {
       .update(organizations)
       .set({ timezone: "America/New_York" })
       .where(eq(organizations.id, organization.id));
-    const changed = await app.request(
+    const changed = await request(
       `/admin/displays/${displayId}/preview?atLocal=2026-09-08T00:30`,
       { headers },
     );
@@ -1124,7 +1101,7 @@ describe("first-run organization setup", () => {
   });
 
   test("override priority suppresses normal content and immediate activation has an expiry", async () => {
-    const ownerLogin = await app.request("/auth/login", {
+    const ownerLogin = await request("/auth/login", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
@@ -1132,13 +1109,12 @@ describe("first-run organization setup", () => {
         password: "super-long-password",
       }),
     });
-    const ownerToken = ((await ownerLogin.json()) as { accessToken: string })
-      .accessToken;
+    const ownerToken = loginCookie(ownerLogin);
     const headers = {
       "content-type": "application/json",
-      authorization: `Bearer ${ownerToken}`,
+      cookie: ownerToken,
     };
-    const created = await app.request("/admin/displays", {
+    const created = await request("/admin/displays", {
       method: "POST",
       headers,
       body: JSON.stringify({ name: "Event display" }),
@@ -1146,21 +1122,21 @@ describe("first-run organization setup", () => {
     const display = (
       (await created.json()) as { display: { id: string; playerUrl: string } }
     ).display;
-    const extra = await app.request("/admin/playlists", {
+    const extra = await request("/admin/playlists", {
       method: "POST",
       headers,
       body: JSON.stringify({ name: "Countdown" }),
     });
     const countdownId = ((await extra.json()) as { playlist: { id: string } })
       .playlist.id;
-    await app.request(`/admin/playlists/${countdownId}/items`, {
+    await request(`/admin/playlists/${countdownId}/items`, {
       method: "PUT",
       headers,
       body: JSON.stringify({
         items: [{ mediaAssetId: readyImageId, imageDurationMs: 5000 }],
       }),
     });
-    await app.request(`/admin/displays/${display.id}/always`, {
+    await request(`/admin/displays/${display.id}/always`, {
       method: "PUT",
       headers,
       body: JSON.stringify({ playlistIds: [readyPlaylistId] }),
@@ -1171,7 +1147,7 @@ describe("first-run organization setup", () => {
       startLocal: string,
       endLocal: string,
     ) =>
-      app.request(`/admin/displays/${display.id}/overrides`, {
+      request(`/admin/displays/${display.id}/overrides`, {
         method: "POST",
         headers,
         body: JSON.stringify({ playlistId, priority, startLocal, endLocal }),
@@ -1198,7 +1174,7 @@ describe("first-run organization setup", () => {
     ).toBe(201);
     const preview = async (atLocal: string) =>
       (await (
-        await app.request(
+        await request(
           `/admin/displays/${display.id}/preview?atLocal=${atLocal}`,
           { headers },
         )
@@ -1226,7 +1202,7 @@ describe("first-run organization setup", () => {
     ]);
     expect((await preview("2026-10-01T12:03")).override?.priority).toBe(1);
     expect((await preview("2026-10-01T12:05")).override).toBeNull();
-    const now = await app.request(`/admin/displays/${display.id}/overrides`, {
+    const now = await request(`/admin/displays/${display.id}/overrides`, {
       method: "POST",
       headers,
       body: JSON.stringify({
@@ -1237,14 +1213,14 @@ describe("first-run organization setup", () => {
       }),
     });
     expect(now.status).toBe(201);
-    const current = await app.request(
+    const current = await request(
       `/player/${display.playerUrl.split("/").at(-1)}/manifest`,
     );
     expect(
       ((await current.json()) as { override: { priority: number } }).override
         .priority,
     ).toBe(100);
-    const missingExpiry = await app.request(
+    const missingExpiry = await request(
       `/admin/displays/${display.id}/overrides`,
       {
         method: "POST",
@@ -1256,7 +1232,7 @@ describe("first-run organization setup", () => {
   });
 
   test("Append and Override creation accept general recurrence and reject invalid combinations", async () => {
-    const login = await app.request("/auth/login", {
+    const login = await request("/auth/login", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
@@ -1264,12 +1240,12 @@ describe("first-run organization setup", () => {
         password: "super-long-password",
       }),
     });
-    const token = ((await login.json()) as { accessToken: string }).accessToken;
+    const token = loginCookie(login);
     const headers = {
       "content-type": "application/json",
-      authorization: `Bearer ${token}`,
+      cookie: token,
     };
-    const created = await app.request("/admin/displays", {
+    const created = await request("/admin/displays", {
       method: "POST",
       headers,
       body: JSON.stringify({ name: "Recurrence fixture" }),
@@ -1293,20 +1269,17 @@ describe("first-run organization setup", () => {
     ];
     for (const path of ["schedules", "overrides"] as const) {
       for (const pattern of patterns) {
-        const response = await app.request(
-          `/admin/displays/${displayId}/${path}`,
-          {
-            method: "POST",
-            headers,
-            body: JSON.stringify({
-              playlistId: readyPlaylistId,
-              startLocal: "2026-01-31T09:00",
-              endLocal: "2026-01-31T10:00",
-              lastOccurrenceDate: "2026-12-31",
-              ...pattern,
-            }),
-          },
-        );
+        const response = await request(`/admin/displays/${displayId}/${path}`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({
+            playlistId: readyPlaylistId,
+            startLocal: "2026-01-31T09:00",
+            endLocal: "2026-01-31T10:00",
+            lastOccurrenceDate: "2026-12-31",
+            ...pattern,
+          }),
+        });
         expect(response.status).toBe(201);
         const saved = (await response.json()) as {
           assignment: {
@@ -1325,39 +1298,33 @@ describe("first-run organization setup", () => {
       { recurrence: "daily", repeatInterval: 0 },
       { recurrence: "daily", lastOccurrenceDate: "2025-01-01" },
     ]) {
-      const response = await app.request(
-        `/admin/displays/${displayId}/schedules`,
-        {
-          method: "POST",
-          headers,
-          body: JSON.stringify({
-            playlistId: readyPlaylistId,
-            startLocal: "2026-01-31T09:00",
-            endLocal: "2026-01-31T10:00",
-            ...invalid,
-          }),
-        },
-      );
-      expect(response.status).toBe(400);
-    }
-    const invalidNow = await app.request(
-      `/admin/displays/${displayId}/overrides`,
-      {
+      const response = await request(`/admin/displays/${displayId}/schedules`, {
         method: "POST",
         headers,
         body: JSON.stringify({
           playlistId: readyPlaylistId,
-          activateNow: true,
-          endLocal: "2099-01-01T00:00",
-          recurrence: "daily",
+          startLocal: "2026-01-31T09:00",
+          endLocal: "2026-01-31T10:00",
+          ...invalid,
         }),
-      },
-    );
+      });
+      expect(response.status).toBe(400);
+    }
+    const invalidNow = await request(`/admin/displays/${displayId}/overrides`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        playlistId: readyPlaylistId,
+        activateNow: true,
+        endLocal: "2099-01-01T00:00",
+        recurrence: "daily",
+      }),
+    });
     expect(invalidNow.status).toBe(400);
   });
 
   test("assignment settings edit preserves identity, timezone, and detects stale or foreign edits", async () => {
-    const login = await app.request("/auth/login", {
+    const login = await request("/auth/login", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
@@ -1365,12 +1332,12 @@ describe("first-run organization setup", () => {
         password: "super-long-password",
       }),
     });
-    const token = ((await login.json()) as { accessToken: string }).accessToken;
+    const token = loginCookie(login);
     const headers = {
       "content-type": "application/json",
-      authorization: `Bearer ${token}`,
+      cookie: token,
     };
-    const created = await app.request("/admin/displays", {
+    const created = await request("/admin/displays", {
       method: "POST",
       headers,
       body: JSON.stringify({ name: "Edit recurrence fixture" }),
@@ -1378,19 +1345,16 @@ describe("first-run organization setup", () => {
     const displayId = ((await created.json()) as { display: { id: string } })
       .display.id;
     const create = async (path: "schedules" | "overrides") => {
-      const response = await app.request(
-        `/admin/displays/${displayId}/${path}`,
-        {
-          method: "POST",
-          headers,
-          body: JSON.stringify({
-            playlistId: readyPlaylistId,
-            startLocal: "2026-02-01T09:00",
-            endLocal: "2026-02-01T10:00",
-            recurrence: "daily",
-          }),
-        },
-      );
+      const response = await request(`/admin/displays/${displayId}/${path}`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          playlistId: readyPlaylistId,
+          startLocal: "2026-02-01T09:00",
+          endLocal: "2026-02-01T10:00",
+          recurrence: "daily",
+        }),
+      });
       expect(response.status).toBe(201);
       return (await response.json()) as {
         assignment: {
@@ -1404,7 +1368,7 @@ describe("first-run organization setup", () => {
     };
     const append = (await create("schedules")).assignment;
     const override = (await create("overrides")).assignment;
-    const list = await app.request(`/admin/displays/${displayId}/assignments`, {
+    const list = await request(`/admin/displays/${displayId}/assignments`, {
       headers,
     });
     const listed = (await list.json()) as {
@@ -1417,7 +1381,7 @@ describe("first-run organization setup", () => {
       body: Record<string, unknown>,
       targetDisplay = displayId,
     ) =>
-      app.request(`/admin/displays/${targetDisplay}/assignments/${id}`, {
+      request(`/admin/displays/${targetDisplay}/assignments/${id}`, {
         method: "PATCH",
         headers,
         body: JSON.stringify(body),
@@ -1539,7 +1503,7 @@ describe("first-run organization setup", () => {
   });
 
   test("partial edits retain immediate seconds and the later DST-overlap instant", async () => {
-    const login = await app.request("/auth/login", {
+    const login = await request("/auth/login", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
@@ -1547,12 +1511,12 @@ describe("first-run organization setup", () => {
         password: "super-long-password",
       }),
     });
-    const token = ((await login.json()) as { accessToken: string }).accessToken;
+    const token = loginCookie(login);
     const headers = {
       "content-type": "application/json",
-      authorization: `Bearer ${token}`,
+      cookie: token,
     };
-    const displayResponse = await app.request("/admin/displays", {
+    const displayResponse = await request("/admin/displays", {
       method: "POST",
       headers,
       body: JSON.stringify({ name: "Partial edit fixture" }),
@@ -1564,7 +1528,7 @@ describe("first-run organization setup", () => {
     ).display;
     const displayId = display.id;
     const create = (path: "schedules" | "overrides", body: object) =>
-      app.request(`/admin/displays/${displayId}/${path}`, {
+      request(`/admin/displays/${displayId}/${path}`, {
         method: "POST",
         headers,
         body: JSON.stringify({ playlistId: readyPlaylistId, ...body }),
@@ -1599,10 +1563,9 @@ describe("first-run organization setup", () => {
         timezone: "America/New_York",
       })
       .where(eq(scheduleRules.id, appendRow.scheduleRuleId));
-    const listed = await app.request(
-      `/admin/displays/${displayId}/assignments`,
-      { headers },
-    );
+    const listed = await request(`/admin/displays/${displayId}/assignments`, {
+      headers,
+    });
     type Listed = {
       id: string;
       version: string;
@@ -1623,7 +1586,7 @@ describe("first-run organization setup", () => {
     if (!originalImmediate || !originalAppend)
       throw new Error("Edit fixture assignments missing");
     const preview = async () => {
-      const response = await app.request(
+      const response = await request(
         `/admin/displays/${displayId}/preview?atLocal=2026-11-03T01:45`,
         { headers },
       );
@@ -1634,7 +1597,7 @@ describe("first-run organization setup", () => {
     };
     expect((await preview()).normalQueue).toEqual([]);
     const patch = (id: string, body: object) =>
-      app.request(`/admin/displays/${displayId}/assignments/${id}`, {
+      request(`/admin/displays/${displayId}/assignments/${id}`, {
         method: "PATCH",
         headers,
         body: JSON.stringify(body),
@@ -1654,7 +1617,7 @@ describe("first-run organization setup", () => {
     expect(prioritySaved.assignment.schedule.endAt).toBe(
       originalImmediate.schedule.endAt,
     );
-    const manifestResponse = await app.request(
+    const manifestResponse = await request(
       `${new URL(display.playerUrl).pathname}/manifest`,
     );
     expect(manifestResponse.status).toBe(200);
@@ -1713,7 +1676,7 @@ describe("first-run organization setup", () => {
   });
 
   test("recurring Overrides publish absolute lookahead windows with priority handoff", async () => {
-    const login = await app.request("/auth/login", {
+    const login = await request("/auth/login", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
@@ -1721,12 +1684,12 @@ describe("first-run organization setup", () => {
         password: "super-long-password",
       }),
     });
-    const token = ((await login.json()) as { accessToken: string }).accessToken;
+    const token = loginCookie(login);
     const headers = {
       "content-type": "application/json",
-      authorization: `Bearer ${token}`,
+      cookie: token,
     };
-    const created = await app.request("/admin/displays", {
+    const created = await request("/admin/displays", {
       method: "POST",
       headers,
       body: JSON.stringify({ name: "Override windows fixture" }),
@@ -1737,20 +1700,17 @@ describe("first-run organization setup", () => {
       priority: number,
       recurrence: Record<string, unknown>,
     ) => {
-      const response = await app.request(
-        `/admin/displays/${displayId}/overrides`,
-        {
-          method: "POST",
-          headers,
-          body: JSON.stringify({
-            playlistId: readyPlaylistId,
-            priority,
-            startLocal: "2026-10-01T12:00",
-            endLocal: "2026-10-01T12:05",
-            ...recurrence,
-          }),
-        },
-      );
+      const response = await request(`/admin/displays/${displayId}/overrides`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          playlistId: readyPlaylistId,
+          priority,
+          startLocal: "2026-10-01T12:00",
+          endLocal: "2026-10-01T12:05",
+          ...recurrence,
+        }),
+      });
       expect(response.status).toBe(201);
       return ((await response.json()) as { assignment: { id: string } })
         .assignment.id;
@@ -1766,7 +1726,7 @@ describe("first-run organization setup", () => {
       lastOccurrenceDate: "2026-10-03",
     });
     const preview = async (atLocal: string) => {
-      const response = await app.request(
+      const response = await request(
         `/admin/displays/${displayId}/preview?atLocal=${atLocal}`,
         { headers },
       );
@@ -1805,7 +1765,7 @@ describe("first-run organization setup", () => {
     expect((await preview("2026-10-04T12:00")).override).toBeNull();
     const same = await preview("2026-10-02T11:59");
     expect(same.version).toBe(before.version);
-    const long = await app.request(`/admin/displays/${displayId}/overrides`, {
+    const long = await request(`/admin/displays/${displayId}/overrides`, {
       method: "POST",
       headers,
       body: JSON.stringify({
@@ -1825,7 +1785,7 @@ describe("first-run organization setup", () => {
   });
 
   test("Append preview shares daily, weekday, monthly, end-date, and DST resolution", async () => {
-    const login = await app.request("/auth/login", {
+    const login = await request("/auth/login", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
@@ -1833,10 +1793,10 @@ describe("first-run organization setup", () => {
         password: "super-long-password",
       }),
     });
-    const token = ((await login.json()) as { accessToken: string }).accessToken;
+    const token = loginCookie(login);
     const headers = {
       "content-type": "application/json",
-      authorization: `Bearer ${token}`,
+      cookie: token,
     };
     const cases = [
       {
@@ -1891,27 +1851,24 @@ describe("first-run organization setup", () => {
       },
     ];
     for (const { rule, yes, no } of cases) {
-      const created = await app.request("/admin/displays", {
+      const created = await request("/admin/displays", {
         method: "POST",
         headers,
         body: JSON.stringify({ name: `Append ${rule.recurrence} ${yes}` }),
       });
       const displayId = ((await created.json()) as { display: { id: string } })
         .display.id;
-      const assigned = await app.request(
-        `/admin/displays/${displayId}/schedules`,
-        {
-          method: "POST",
-          headers,
-          body: JSON.stringify({ playlistId: readyPlaylistId, ...rule }),
-        },
-      );
+      const assigned = await request(`/admin/displays/${displayId}/schedules`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ playlistId: readyPlaylistId, ...rule }),
+      });
       expect(assigned.status).toBe(201);
       for (const [at, expected] of [
         [yes, true],
         [no, false],
       ] as const) {
-        const preview = await app.request(
+        const preview = await request(
           `/admin/displays/${displayId}/preview?atLocal=${at}`,
           { headers },
         );

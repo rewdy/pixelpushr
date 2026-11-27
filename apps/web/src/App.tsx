@@ -1,6 +1,15 @@
-import { Alert, Center, Container, Loader, Title } from "@mantine/core";
-import { useQuery } from "@tanstack/react-query";
-import { Redirect, Route, Switch } from "wouter";
+import {
+  Alert,
+  Button,
+  Center,
+  Container,
+  Loader,
+  Stack,
+  Title,
+} from "@mantine/core";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useEffect } from "react";
+import { Redirect, Route, Switch, useLocation } from "wouter";
 import { AdminShell } from "./components/AdminShell/AdminShell";
 import {
   ConfirmScreen,
@@ -21,7 +30,9 @@ import { PlayerPage } from "./components/PlayerPage/PlayerPage";
 import { PlaylistEditorPage } from "./components/PlaylistsPage/PlaylistEditorPage";
 import { PlaylistsPage } from "./components/PlaylistsPage/PlaylistsPage";
 import { SettingsPage } from "./components/SettingsPage/SettingsPage";
-import { getToken, requestJson } from "./helpers/api";
+import { RequestError, requestJson, sessionEndedEvent } from "./helpers/api";
+import { loginDestination } from "./helpers/sessionNavigation";
+import { useSignOut } from "./hooks/useSignOut";
 
 type MeResponse = {
   user: { email: string };
@@ -30,20 +41,21 @@ type MeResponse = {
 };
 
 const AdminGate = () => {
-  const token = getToken();
+  const signOut = useSignOut();
   const me = useQuery({
-    queryKey: ["me", token],
-    queryFn: () => requestJson<MeResponse>("/admin/me"),
-    enabled: !!token,
+    queryKey: ["me"],
+    queryFn: ({ signal }) => requestJson<MeResponse>("/admin/me", { signal }),
     retry: false,
   });
+  const lacksMembership =
+    me.error instanceof RequestError && me.error.code === "membership_required";
   const setup = useQuery({
     queryKey: ["setup-status"],
     queryFn: () => requestJson<{ setupRequired: boolean }>("/setup/status"),
-    enabled: !!token && me.isError,
+    enabled: lacksMembership,
     retry: false,
   });
-  if (!token) return <Redirect to="/login" />;
+
   if (me.isPending)
     return (
       <Center h="100vh">
@@ -52,8 +64,23 @@ const AdminGate = () => {
       </Center>
     );
   if (me.isError) {
-    if (setup.data?.setupRequired) return <Redirect to="/setup" />;
-    if (setup.isPending)
+    if (
+      me.error instanceof RequestError &&
+      (me.error.code === "session_required" ||
+        me.error.code === "session_ended")
+    )
+      return (
+        <Redirect
+          to={loginDestination(
+            window.location.pathname + window.location.search,
+            me.error.code === "session_ended",
+          )}
+          replace
+        />
+      );
+    if (lacksMembership && setup.data?.setupRequired)
+      return <Redirect to="/setup" />;
+    if (lacksMembership && setup.isPending)
       return (
         <Center h="100vh">
           <PageTitle name="Loading" />
@@ -62,11 +89,29 @@ const AdminGate = () => {
       );
     return (
       <Container py="xl">
-        <PageTitle name="Access denied" />
-        <Alert color="red">
-          This account is not an administrator. Accept an invitation to
-          continue.
-        </Alert>
+        <PageTitle
+          name={lacksMembership ? "Access denied" : "Workspace unavailable"}
+        />
+        <Stack align="start">
+          <Alert color="red">{setup.error?.message ?? me.error.message}</Alert>
+          {lacksMembership && !setup.isError ? (
+            <Button
+              loading={signOut.isPending}
+              onClick={() => signOut.mutate()}
+            >
+              Switch accounts
+            </Button>
+          ) : (
+            <Button
+              onClick={() =>
+                void (setup.isError ? setup.refetch() : me.refetch())
+              }
+            >
+              Try again
+            </Button>
+          )}
+          {signOut.error && <Alert color="red">{signOut.error.message}</Alert>}
+        </Stack>
       </Container>
     );
   }
@@ -119,35 +164,51 @@ const AdminGate = () => {
 };
 
 /** Renders the admin and public player routes. */
-export const App = () => (
-  <Switch>
-    <Route path="/player/:token">
-      <PageTitle name="Player" />
-      <PlayerPage />
-    </Route>
-    <Route path="/login">
-      <PageTitle name="Sign in" />
-      <LoginScreen />
-    </Route>
-    <Route path="/register">
-      <PageTitle name="Create account" />
-      <RegisterScreen />
-    </Route>
-    <Route path="/confirm">
-      <PageTitle name="Confirm account" />
-      <ConfirmScreen />
-    </Route>
-    <Route path="/setup">
-      <PageTitle name="Set up workspace" />
-      <SetupScreen />
-    </Route>
-    <Route path="/invite/:token">
-      <PageTitle name="Accept invitation" />
-      <InviteScreen />
-    </Route>
-    {/* Keep the catch-all last; Wouter selects the first matching route. */}
-    <Route>
-      <AdminGate />
-    </Route>
-  </Switch>
-);
+export const App = () => {
+  const queryClient = useQueryClient();
+  const [, navigate] = useLocation();
+  useEffect(() => {
+    const handleSessionEnd = () => {
+      const { pathname, search } = window.location;
+      if (pathname === "/login" || pathname.startsWith("/player/")) return;
+      const destination = loginDestination(pathname + search, true);
+      queryClient.clear();
+      navigate(destination, { replace: true });
+    };
+    window.addEventListener(sessionEndedEvent, handleSessionEnd);
+    return () =>
+      window.removeEventListener(sessionEndedEvent, handleSessionEnd);
+  }, [navigate, queryClient]);
+  return (
+    <Switch>
+      <Route path="/player/:token">
+        <PageTitle name="Player" />
+        <PlayerPage />
+      </Route>
+      <Route path="/login">
+        <PageTitle name="Sign in" />
+        <LoginScreen />
+      </Route>
+      <Route path="/register">
+        <PageTitle name="Create account" />
+        <RegisterScreen />
+      </Route>
+      <Route path="/confirm">
+        <PageTitle name="Confirm account" />
+        <ConfirmScreen />
+      </Route>
+      <Route path="/setup">
+        <PageTitle name="Set up workspace" />
+        <SetupScreen />
+      </Route>
+      <Route path="/invite/:token">
+        <PageTitle name="Accept invitation" />
+        <InviteScreen />
+      </Route>
+      {/* Keep the catch-all last; Wouter selects the first matching route. */}
+      <Route>
+        <AdminGate />
+      </Route>
+    </Switch>
+  );
+};

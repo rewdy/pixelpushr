@@ -51,19 +51,16 @@ export const createApp = (dependencies?: AppDependencies) => {
     if (dependencies.storage) {
       registerMediaRoutes(app, {
         db: dependencies.db,
-        auth: dependencies.auth,
         storage: dependencies.storage,
         maxImageBytes: dependencies.maxImageBytes ?? 20 * 1024 * 1024,
         maxVideoBytes: dependencies.maxVideoBytes ?? 500 * 1024 * 1024,
       });
       registerPlaylistRoutes(app, {
         db: dependencies.db,
-        auth: dependencies.auth,
         storage: dependencies.storage,
       });
       registerDisplayRoutes(app, {
         db: dependencies.db,
-        auth: dependencies.auth,
         storage: dependencies.storage,
         publicWebUrl: dependencies.publicWebUrl,
       });

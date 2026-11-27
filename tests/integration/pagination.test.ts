@@ -17,11 +17,12 @@ import {
 } from "../../apps/api/src/db/schema";
 import { createLocalStorage } from "../../apps/api/src/media/localStorage";
 import { testDatabaseAdminUrl } from "../config";
+import { browserRequest, loginCookie } from "../fixtures/authRequests";
 
 const databaseName = `pixelpushr_paging_${crypto.randomUUID().replaceAll("-", "")}`;
 let admin: ReturnType<typeof postgres>;
 let connection: ReturnType<typeof createDatabase>;
-let app: ReturnType<typeof createApp>;
+let request: ReturnType<typeof browserRequest>;
 let directory: string;
 let headers: Record<string, string>;
 let assetIds: string[];
@@ -34,7 +35,7 @@ type ListResponse = Record<string, unknown> & {
   total?: number;
 };
 const listed = async (path: string): Promise<ListResponse> => {
-  const response = await app.request(path, { headers });
+  const response = await request(path, { headers });
   expect(response.status).toBe(200);
   return response.json() as Promise<ListResponse>;
 };
@@ -51,21 +52,23 @@ describe("opt-in admin pagination", () => {
         .pathname,
     });
     directory = await mkdtemp(join(tmpdir(), "pixelpushr-paging-"));
-    app = createApp({
-      db: connection.db,
-      auth: createLocalAuth(
-        connection.db,
-        "test-secret-longer-than-thirty-two-characters",
-      ),
-      storage: createLocalStorage(
-        directory,
-        "http://127.0.0.1:5173",
-        "test-secret-longer-than-thirty-two-characters",
-      ),
-      mailer: { send: async () => {} },
-      publicWebUrl: "http://127.0.0.1:5173",
-    });
-    await app.request("/auth/register", {
+    request = browserRequest(
+      createApp({
+        db: connection.db,
+        auth: createLocalAuth(
+          connection.db,
+          "test-secret-longer-than-thirty-two-characters",
+        ),
+        storage: createLocalStorage(
+          directory,
+          "http://127.0.0.1:5173",
+          "test-secret-longer-than-thirty-two-characters",
+        ),
+        mailer: { send: async () => {} },
+        publicWebUrl: "http://127.0.0.1:5173",
+      }),
+    );
+    await request("/auth/register", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
@@ -73,7 +76,7 @@ describe("opt-in admin pagination", () => {
         password: "super-long-password",
       }),
     });
-    const login = await app.request("/auth/login", {
+    const login = await request("/auth/login", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
@@ -81,12 +84,12 @@ describe("opt-in admin pagination", () => {
         password: "super-long-password",
       }),
     });
-    const token = ((await login.json()) as { accessToken: string }).accessToken;
+    const token = loginCookie(login);
     headers = {
-      authorization: `Bearer ${token}`,
+      cookie: token,
       "content-type": "application/json",
     };
-    const setup = await app.request("/setup", {
+    const setup = await request("/setup", {
       method: "POST",
       headers,
       body: JSON.stringify({ name: "Paging", timezone: "UTC" }),
@@ -208,7 +211,7 @@ describe("opt-in admin pagination", () => {
         "pageSize=bogus",
       ]) {
         expect(
-          (await app.request(`/admin/${route}?${query}`, { headers })).status,
+          (await request(`/admin/${route}?${query}`, { headers })).status,
         ).toBe(400);
       }
       const sizeOnly = await listed(`/admin/${route}?pageSize=5`);

@@ -1,6 +1,11 @@
 export type ApiErrorCode =
   | "invalid_request"
   | "unauthorized"
+  | "session_required"
+  | "session_ended"
+  | "membership_required"
+  | "owner_required"
+  | "auth_unavailable"
   | "forbidden"
   | "not_found"
   | "conflict"

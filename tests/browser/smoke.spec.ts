@@ -1,6 +1,14 @@
 import { expect, test } from "@playwright/test";
 
 test("unauthenticated console redirects to owned sign-in", async ({ page }) => {
+  await page.route("**/api/admin/me", (route) =>
+    route.fulfill({
+      status: 401,
+      json: {
+        error: { code: "session_required", message: "Sign in to continue." },
+      },
+    }),
+  );
   await page.goto("/");
   await expect(page.getByRole("heading", { name: "Sign in" })).toBeVisible();
 });
@@ -54,8 +62,8 @@ test("public player route loads", async ({ page }) => {
 test("owner can create a shareable invitation through the console", async ({
   page,
 }) => {
-  await page.addInitScript(() =>
-    sessionStorage.setItem("pixelpushr-admin-session", "test-token"),
+  await page.route("**/api/admin/**", (route) =>
+    route.fulfill({ status: 404 }),
   );
   await page.route("**/api/admin/me", (route) =>
     route.fulfill({
@@ -123,8 +131,8 @@ test("owner can create a shareable invitation through the console", async ({
 test("admin can upload media and save a playable playlist", async ({
   page,
 }) => {
-  await page.addInitScript(() =>
-    sessionStorage.setItem("pixelpushr-admin-session", "test-token"),
+  await page.route("**/api/admin/**", (route) =>
+    route.fulfill({ status: 404 }),
   );
   await page.route("**/api/admin/me", (route) =>
     route.fulfill({

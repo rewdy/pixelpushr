@@ -32,8 +32,19 @@ const secret = "browser-test-secret-longer-than-thirty-two-characters";
 let admin: ReturnType<typeof postgres>;
 let connection: ReturnType<typeof createDatabase>;
 let api: ChildProcess;
-let token: string;
-let administratorToken: string;
+type BrowserCookie = Awaited<
+  ReturnType<ReturnType<Page["context"]>["cookies"]>
+>[number];
+let ownerCookie: BrowserCookie;
+let administratorCookie: BrowserCookie;
+
+const sessionCookie = async (page: Page) => {
+  const cookie = (await page.context().cookies()).find(
+    (entry) => entry.name === "pixelpushr-session",
+  );
+  if (!cookie) throw new Error("Missing browser session cookie");
+  return cookie;
+};
 const rejectingSmtp = createServer((socket) =>
   socket.end("421 Test mail service unavailable\r\n"),
 );
@@ -220,18 +231,13 @@ test("owner shares a working administrator invitation when email fails", async (
   await page.getByRole("button", { name: "Create workspace" }).click();
   await expect(page.getByRole("heading", { name: "Overview" })).toBeVisible();
   const savedZone = await page.evaluate(async () => {
-    const response = await fetch("/api/admin/me", {
-      headers: {
-        authorization: `Bearer ${sessionStorage.getItem("pixelpushr-admin-session")}`,
-      },
-    });
+    const response = await fetch("/api/admin/me");
     return (await response.json()) as { organization: { timezone: string } };
   });
   expect(savedZone.organization.timezone).toBe("America/Chicago");
-  token = await page.evaluate(
-    () => sessionStorage.getItem("pixelpushr-admin-session") ?? "",
-  );
-  expect(token).toBeTruthy();
+  ownerCookie = await sessionCookie(page);
+  expect(ownerCookie.httpOnly).toBe(true);
+  expect(ownerCookie.expires).toBeGreaterThan(Date.now() / 1000 + 6 * 86400);
   await page.goto("/people");
   await page.getByRole("button", { name: "Create invitation" }).click();
   await page
@@ -291,10 +297,7 @@ test("owner shares a working administrator invitation when email fails", async (
   await expect(
     invited.getByRole("heading", { name: "Overview" }),
   ).toBeVisible();
-  administratorToken = await invited.evaluate(
-    () => sessionStorage.getItem("pixelpushr-admin-session") ?? "",
-  );
-  expect(administratorToken).toBeTruthy();
+  administratorCookie = await sessionCookie(invited);
   await invitedContext.close();
   await page.reload();
   await expect(
@@ -344,11 +347,7 @@ test.afterAll(async () => {
 test("video uploads get a poster when possible and stay ready when poster upload fails", async ({
   page,
 }) => {
-  await page.addInitScript(
-    (accessToken) =>
-      sessionStorage.setItem("pixelpushr-admin-session", accessToken),
-    token,
-  );
+  await page.context().addCookies([ownerCookie]);
   await page.goto("/media");
   const video = Buffer.from(videoBase64, "base64");
   await page.locator('input[type="file"]').setInputFiles({
@@ -358,11 +357,7 @@ test("video uploads get a poster when possible and stay ready when poster upload
   });
   await expect(page.getByText("Media is ready for playlists.")).toBeVisible();
   const posters = await page.evaluate(async () => {
-    const response = await fetch("/api/admin/media", {
-      headers: {
-        authorization: `Bearer ${sessionStorage.getItem("pixelpushr-admin-session")}`,
-      },
-    });
+    const response = await fetch("/api/admin/media");
     return (await response.json()) as {
       assets: { name: string; status: string; previewUrl: string | null }[];
     };
@@ -392,11 +387,7 @@ test("video uploads get a poster when possible and stay ready when poster upload
       .getByText("ready"),
   ).toBeVisible();
   const fallback = await page.evaluate(async () => {
-    const response = await fetch("/api/admin/media", {
-      headers: {
-        authorization: `Bearer ${sessionStorage.getItem("pixelpushr-admin-session")}`,
-      },
-    });
+    const response = await fetch("/api/admin/media");
     return (await response.json()) as {
       assets: { name: string; status: string; previewUrl: string | null }[];
     };
@@ -412,11 +403,7 @@ test("video uploads get a poster when possible and stay ready when poster upload
 test("a mixed picker batch keeps successful image and video uploads when one file is rejected", async ({
   page,
 }) => {
-  await page.addInitScript(
-    (accessToken) =>
-      sessionStorage.setItem("pixelpushr-admin-session", accessToken),
-    token,
-  );
+  await page.context().addCookies([ownerCookie]);
   await page.goto("/media");
   const png = Buffer.from(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/5QAAAABJRU5ErkJggg==",
@@ -452,11 +439,7 @@ test("a mixed picker batch keeps successful image and video uploads when one fil
 test("upload media and publish an ordered playlist through the real API", async ({
   page,
 }) => {
-  await page.addInitScript(
-    (accessToken) =>
-      sessionStorage.setItem("pixelpushr-admin-session", accessToken),
-    token,
-  );
+  await page.context().addCookies([ownerCookie]);
   await page.goto("/media");
   await expect(
     page.getByRole("heading", { name: "Media library" }),
@@ -632,11 +615,7 @@ test("upload media and publish an ordered playlist through the real API", async 
 test("listing links and creation dialogs preserve input and permissions", async ({
   page,
 }) => {
-  await page.addInitScript(
-    (accessToken) =>
-      sessionStorage.setItem("pixelpushr-admin-session", accessToken),
-    token,
-  );
+  await page.context().addCookies([ownerCookie]);
   await page.goto("/playlists");
   const playlistLink = page.getByRole("link", { name: "Brand loop" });
   await playlistLink.focus();
@@ -786,14 +765,11 @@ test("listing links and creation dialogs preserve input and permissions", async 
   await revokeDialog.getByRole("button", { name: "Revoke invitation" }).click();
   await expect(linkField).toHaveCount(0);
 
-  // A separate page avoids rerunning the owner's page-level init script.
-  const administratorPage = await page.context().newPage();
-  await administratorPage.addInitScript(
-    (accessToken) =>
-      sessionStorage.setItem("pixelpushr-admin-session", accessToken),
-    administratorToken,
-  );
-  await administratorPage.goto("/people");
+  const administratorContext = await page.context().browser()?.newContext();
+  if (!administratorContext) throw new Error("Missing browser context");
+  const administratorPage = await administratorContext.newPage();
+  await administratorContext.addCookies([administratorCookie]);
+  await administratorPage.goto("http://127.0.0.1:5173/people");
   await expect(
     administratorPage.getByRole("heading", { name: "People & access" }),
   ).toBeVisible();
@@ -803,16 +779,13 @@ test("listing links and creation dialogs preserve input and permissions", async 
   await expect(
     administratorPage.getByRole("button", { name: /^Revoke invitation/ }),
   ).toHaveCount(0);
+  await administratorContext.close();
 });
 
 test("recurring Override creation and settings edits use the shared schedule controls", async ({
   page,
 }) => {
-  await page.addInitScript(
-    (accessToken) =>
-      sessionStorage.setItem("pixelpushr-admin-session", accessToken),
-    token,
-  );
+  await page.context().addCookies([ownerCookie]);
   await page.goto("/displays");
   await page.getByRole("link", { name: "Assign playlists" }).click();
   await page.getByRole("button", { name: "Add playlist" }).click();
@@ -940,11 +913,10 @@ test("recurring Override creation and settings edits use the shared schedule con
   await page
     .getByRole("button", { name: "Edit Weekly campaign override settings" })
     .click();
-  await page.evaluate(async (accessToken) => {
+  await page.evaluate(async () => {
     const displayId = window.location.pathname.split("/").at(-1);
     const path = `/api/admin/displays/${displayId}/assignments`;
     const headers = {
-      authorization: `Bearer ${accessToken}`,
       "content-type": "application/json",
     };
     const list = await fetch(path, { headers });
@@ -965,7 +937,7 @@ test("recurring Override creation and settings edits use the shared schedule con
     });
     if (!changed.ok)
       throw new Error(`Concurrent edit returned ${changed.status}`);
-  }, token);
+  });
   await edit.getByRole("textbox", { name: "Priority" }).fill("4");
   await edit.getByRole("button", { name: "Save settings" }).click();
   await expect(
@@ -1050,11 +1022,7 @@ test("recurring Override creation and settings edits use the shared schedule con
 test("visual picker and bulk draft edits preserve duplicate items and save boundary", async ({
   page,
 }) => {
-  await page.addInitScript(
-    (accessToken) =>
-      sessionStorage.setItem("pixelpushr-admin-session", accessToken),
-    token,
-  );
+  await page.context().addCookies([ownerCookie]);
   await page.goto("/playlists");
   await page.getByRole("button", { name: "Create playlist" }).click();
   await page
@@ -1253,11 +1221,7 @@ test("visual picker and bulk draft edits preserve duplicate items and save bound
 test("draft preview loops images and videos without publishing", async ({
   page,
 }) => {
-  await page.addInitScript(
-    (accessToken) =>
-      sessionStorage.setItem("pixelpushr-admin-session", accessToken),
-    token,
-  );
+  await page.context().addCookies([ownerCookie]);
   await page.goto("/playlists");
   await page.getByRole("button", { name: "Create playlist" }).click();
   await page
@@ -1311,11 +1275,7 @@ test("draft preview loops images and videos without publishing", async ({
 test("draft preview repeats video until its configured duration", async ({
   page,
 }) => {
-  await page.addInitScript(
-    (accessToken) =>
-      sessionStorage.setItem("pixelpushr-admin-session", accessToken),
-    token,
-  );
+  await page.context().addCookies([ownerCookie]);
   await page.goto("/playlists");
   await page.getByRole("button", { name: "Create playlist" }).click();
   await page
@@ -1357,11 +1317,7 @@ test("draft preview repeats video until its configured duration", async ({
 test("media library manages rename, tags, replacement, and informed deletion", async ({
   page,
 }) => {
-  await page.addInitScript(
-    (accessToken) =>
-      sessionStorage.setItem("pixelpushr-admin-session", accessToken),
-    token,
-  );
+  await page.context().addCookies([ownerCookie]);
   await page.goto("/media");
   const row = () => page.getByRole("row").filter({ hasText: "brand" });
   await row().getByRole("button", { name: "brand.png" }).click();
@@ -1431,10 +1387,7 @@ test("media library manages rename, tags, replacement, and informed deletion", a
   await expect(remove).toContainText("Brand loop: 1 item");
   await expect(remove).toContainText("from existing playlists");
   const staleSaveStatus = await page.evaluate(async (playlistId) => {
-    const auth = {
-      authorization: `Bearer ${sessionStorage.getItem("pixelpushr-admin-session")}`,
-    };
-    const listed = await fetch("/api/admin/media", { headers: auth });
+    const listed = await fetch("/api/admin/media");
     const assets = (await listed.json()) as {
       assets: Array<{ id: string; name: string }>;
     };
@@ -1444,7 +1397,7 @@ test("media library manages rename, tags, replacement, and informed deletion", a
     if (!asset) throw new Error("Missing media asset");
     const saved = await fetch(`/api/admin/playlists/${playlistId}/items`, {
       method: "PUT",
-      headers: { ...auth, "content-type": "application/json" },
+      headers: { "content-type": "application/json" },
       body: JSON.stringify({
         items: [
           { mediaAssetId: asset.id, imageDurationMs: 8000 },
@@ -1492,11 +1445,7 @@ test("media selection adds tags and reviews combined deletion", async ({
   page,
 }) => {
   test.setTimeout(60000);
-  await page.addInitScript(
-    (accessToken) =>
-      sessionStorage.setItem("pixelpushr-admin-session", accessToken),
-    token,
-  );
+  await page.context().addCookies([ownerCookie]);
   await page.goto("/media");
   const buffer = Buffer.from(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/5QAAAABJRU5ErkJggg==",
@@ -1556,7 +1505,6 @@ test("media selection adds tags and reviews combined deletion", async ({
   await expect(page.getByText("2 selected", { exact: true })).toBeVisible();
   const bulkPlaylistId = await page.evaluate(async () => {
     const headers = {
-      authorization: `Bearer ${sessionStorage.getItem("pixelpushr-admin-session")}`,
       "content-type": "application/json",
     };
     const listed = await fetch("/api/admin/media", { headers });
@@ -1598,7 +1546,6 @@ test("media selection adds tags and reviews combined deletion", async ({
     .click();
   await page.evaluate(async (playlistId) => {
     const headers = {
-      authorization: `Bearer ${sessionStorage.getItem("pixelpushr-admin-session")}`,
       "content-type": "application/json",
     };
     const listed = await fetch("/api/admin/media", { headers });
@@ -1639,9 +1586,7 @@ test("media selection adds tags and reviews combined deletion", async ({
   ).toBeVisible();
   const keptItems = await page.evaluate(async (playlistId) => {
     const response = await fetch(`/api/admin/playlists/${playlistId}`, {
-      headers: {
-        authorization: `Bearer ${sessionStorage.getItem("pixelpushr-admin-session")}`,
-      },
+      headers: {},
     });
     return response.json() as Promise<{
       items: Array<{ asset: { name: string } }>;
@@ -1654,7 +1599,6 @@ test("media selection adds tags and reviews combined deletion", async ({
     const response = await fetch("/api/admin/media/uploads", {
       method: "POST",
       headers: {
-        authorization: `Bearer ${sessionStorage.getItem("pixelpushr-admin-session")}`,
         "content-type": "application/json",
       },
       body: JSON.stringify({
@@ -1743,7 +1687,8 @@ test("top-level pages keep filters, selection, and ordered editors in scope", as
     {
       method: "PUT",
       headers: {
-        authorization: `Bearer ${token}`,
+        cookie: `${ownerCookie.name}=${ownerCookie.value}`,
+        origin: "http://127.0.0.1:5173",
         "content-type": "application/json",
       },
       body: JSON.stringify({
@@ -1753,11 +1698,7 @@ test("top-level pages keep filters, selection, and ordered editors in scope", as
   );
   expect(savedAssignments.status).toBe(200);
 
-  await page.addInitScript(
-    (accessToken) =>
-      sessionStorage.setItem("pixelpushr-admin-session", accessToken),
-    token,
-  );
+  await page.context().addCookies([ownerCookie]);
   await page.goto("/media?page=2&search=Paging%20asset");
   await expect(page.getByText("Showing 26–30 of 30 results")).toBeVisible();
   await expect(
@@ -1868,4 +1809,60 @@ test("top-level pages keep filters, selection, and ordered editors in scope", as
   await expect(
     page.getByTestId(`display-card-${displayRows[29]?.id}`),
   ).toBeVisible();
+});
+
+test("the administrator session survives a browser restart and logout clears it", async ({
+  playwright,
+}) => {
+  const { mkdtemp, rm } = await import("node:fs/promises");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const profile = await mkdtemp(join(tmpdir(), "pixelpushr-session-profile-"));
+  const origin = "http://127.0.0.1:5173";
+  try {
+    const first = await playwright.chromium.launchPersistentContext(profile);
+    try {
+      const tab = first.pages()[0] ?? (await first.newPage());
+      await tab.goto(`${origin}/media`);
+      await tab
+        .getByRole("textbox", { name: "Email" })
+        .fill("browser-admin@example.com");
+      await tab
+        .getByRole("textbox", { name: "Password" })
+        .fill("admin-password-123");
+      await tab.getByRole("button", { name: "Sign in" }).click();
+      await expect(
+        tab.getByRole("heading", { name: "Media library" }),
+      ).toBeVisible();
+      await tab.reload();
+      await expect(
+        tab.getByRole("heading", { name: "Media library" }),
+      ).toBeVisible();
+      expect((await sessionCookie(tab)).httpOnly).toBe(true);
+      expect(await tab.evaluate(() => document.cookie)).not.toContain(
+        "pixelpushr-session",
+      );
+    } finally {
+      await first.close();
+    }
+    const second = await playwright.chromium.launchPersistentContext(profile);
+    try {
+      const tab = second.pages()[0] ?? (await second.newPage());
+      await tab.goto(`${origin}/media`);
+      await expect(
+        tab.getByRole("heading", { name: "Media library" }),
+      ).toBeVisible();
+      await tab.getByRole("button", { name: "Sign out" }).click();
+      await expect(tab.getByRole("heading", { name: "Sign in" })).toBeVisible();
+      expect(
+        (await second.cookies()).some(
+          (cookie) => cookie.name === "pixelpushr-session",
+        ),
+      ).toBe(false);
+    } finally {
+      await second.close();
+    }
+  } finally {
+    await rm(profile, { recursive: true, force: true });
+  }
 });

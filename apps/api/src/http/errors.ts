@@ -49,7 +49,7 @@ export const handleError = (error: Error, context: Context) => {
     JSON.stringify({
       level: "error",
       event: "request_failure",
-      message: error.message,
+      errorType: error.name,
     }),
   );
   const body: ApiErrorResponse = {

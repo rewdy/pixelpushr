@@ -6,9 +6,6 @@ const image =
 const longName = `${"very-long-unbroken-media-name-".repeat(12)}.png`;
 
 const mockAdmin = async (page: Page) => {
-  await page.addInitScript(() =>
-    sessionStorage.setItem("pixelpushr-admin-session", "test-token"),
-  );
   await page.route("**/api/admin/me", (route) =>
     route.fulfill({
       json: {
