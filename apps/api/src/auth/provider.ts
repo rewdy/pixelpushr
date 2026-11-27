@@ -10,6 +10,8 @@ export type AuthProvider = {
   signUp: (email: string, password: string) => Promise<SignUpResult>;
   confirm: (email: string, code: string) => Promise<void>;
   signIn: (email: string, password: string) => Promise<Session>;
+  renew?: (refreshToken: string) => Promise<Session>;
+  revoke?: (refreshToken: string) => Promise<void>;
   verify: (
     token: string,
     options?: { requireVerifiedEmail?: boolean },

@@ -1,5 +1,6 @@
 import {
   ActionIcon,
+  Alert,
   AppShell,
   Avatar,
   Box,
@@ -25,7 +26,7 @@ import {
   LuUsers,
 } from "react-icons/lu";
 import { Link, useLocation } from "wouter";
-import { setToken } from "../../helpers/api";
+import { useSignOut } from "../../hooks/useSignOut";
 import classes from "./AdminShell.module.css";
 
 type AdminShellProps = {
@@ -59,7 +60,8 @@ export const AdminShell = ({
   organizationName,
 }: AdminShellProps) => {
   const [opened, { toggle, close }] = useDisclosure(false);
-  const [location, navigate] = useLocation();
+  const [location] = useLocation();
+  const signOut = useSignOut();
   return (
     <AppShell
       navbar={{ width: 246, breakpoint: "md", collapsed: { mobile: !opened } }}
@@ -133,14 +135,15 @@ export const AdminShell = ({
                 variant="subtle"
                 color="gray"
                 aria-label="Sign out"
-                onClick={() => {
-                  setToken(null);
-                  navigate("/login");
-                }}
+                loading={signOut.isPending}
+                onClick={() => signOut.mutate()}
               >
                 <LuLogOut size={16} />
               </ActionIcon>
             </Group>
+            {signOut.error && (
+              <Alert color="red">{signOut.error.message}</Alert>
+            )}
           </Box>
         </Stack>
       </AppShell.Navbar>

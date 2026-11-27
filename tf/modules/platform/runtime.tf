@@ -17,7 +17,20 @@ resource "aws_cognito_user_pool_client" "web" {
   user_pool_id                  = aws_cognito_user_pool.admin.id
   generate_secret               = false
   prevent_user_existence_errors = "ENABLED"
-  explicit_auth_flows           = ["ALLOW_USER_PASSWORD_AUTH", "ALLOW_REFRESH_TOKEN_AUTH", "ALLOW_USER_SRP_AUTH"]
+  explicit_auth_flows           = ["ALLOW_USER_PASSWORD_AUTH", "ALLOW_USER_SRP_AUTH"]
+  access_token_validity         = 15
+  id_token_validity             = 15
+  refresh_token_validity        = 7
+  enable_token_revocation       = true
+  token_validity_units {
+    access_token  = "minutes"
+    id_token      = "minutes"
+    refresh_token = "days"
+  }
+  refresh_token_rotation {
+    feature                    = "ENABLED"
+    retry_grace_period_seconds = 30
+  }
 }
 
 resource "aws_sesv2_email_identity" "invites" {
@@ -59,7 +72,7 @@ resource "aws_iam_role_policy" "app" {
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
-      { Effect = "Allow", Action = ["secretsmanager:GetSecretValue"], Resource = aws_db_instance.main.master_user_secret[0].secret_arn },
+      { Effect = "Allow", Action = ["secretsmanager:GetSecretValue"], Resource = [aws_db_instance.main.master_user_secret[0].secret_arn, "arn:aws:secretsmanager:${var.region}:${data.aws_caller_identity.current.account_id}:secret:${local.name}/session-encryption-??????"] },
       { Effect = "Allow", Action = ["s3:PutObject", "s3:GetObject", "s3:DeleteObject"], Resource = "${aws_s3_bucket.media.arn}/*" },
       { Effect = "Allow", Action = ["ses:SendEmail"], Resource = "*" },
     ]
@@ -81,20 +94,21 @@ resource "aws_cloudwatch_log_group" "media_cleanup" {
 
 locals {
   lambda_environment = {
-    APP_ENV              = "production"
-    AUTH_MODE            = "cognito"
-    DATABASE_HOST        = aws_db_instance.main.address
-    DATABASE_NAME        = aws_db_instance.main.db_name
-    DATABASE_SECRET_ARN  = aws_db_instance.main.master_user_secret[0].secret_arn
-    NODE_EXTRA_CA_CERTS  = "/var/task/rds-ca.pem"
-    COGNITO_USER_POOL_ID = aws_cognito_user_pool.admin.id
-    COGNITO_CLIENT_ID    = aws_cognito_user_pool_client.web.id
-    PUBLIC_WEB_URL       = "https://${var.domain_name}"
-    MAIL_FROM            = var.mail_from
-    INITIAL_OWNER_EMAIL  = var.initial_owner_email
-    MEDIA_STORAGE        = "s3"
-    MEDIA_BUCKET         = aws_s3_bucket.media.bucket
-    MEDIA_PUBLIC_URL     = "https://${var.domain_name}/media"
+    SESSION_ENCRYPTION_SECRET_ID = "${local.name}/session-encryption"
+    APP_ENV                      = "production"
+    AUTH_MODE                    = "cognito"
+    DATABASE_HOST                = aws_db_instance.main.address
+    DATABASE_NAME                = aws_db_instance.main.db_name
+    DATABASE_SECRET_ARN          = aws_db_instance.main.master_user_secret[0].secret_arn
+    NODE_EXTRA_CA_CERTS          = "/var/task/rds-ca.pem"
+    COGNITO_USER_POOL_ID         = aws_cognito_user_pool.admin.id
+    COGNITO_CLIENT_ID            = aws_cognito_user_pool_client.web.id
+    PUBLIC_WEB_URL               = "https://${var.domain_name}"
+    MAIL_FROM                    = var.mail_from
+    INITIAL_OWNER_EMAIL          = var.initial_owner_email
+    MEDIA_STORAGE                = "s3"
+    MEDIA_BUCKET                 = aws_s3_bucket.media.bucket
+    MEDIA_PUBLIC_URL             = "https://${var.domain_name}/media"
   }
 }
 

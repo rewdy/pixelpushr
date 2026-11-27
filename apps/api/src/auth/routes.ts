@@ -4,6 +4,7 @@ import type {
 } from "@pixelpushr/contracts/invitations";
 import { and, eq, gt, sql } from "drizzle-orm";
 import type { Hono } from "hono";
+import { setCookie } from "hono/cookie";
 import { z } from "zod";
 import type { Database } from "../db/client";
 import { firstRow } from "../db/rows";
@@ -11,8 +12,16 @@ import { invitations, memberships, organizations, users } from "../db/schema";
 import { ApiError } from "../http/errors";
 import { parseJsonBody } from "../http/validation";
 import type { MediaStorage } from "../media/storage";
+import {
+  getAdmin,
+  getOwner,
+  requireMembership,
+  sessionCredential,
+} from "./guard";
 import { type InvitationMailer, submitInvitationEmail } from "./mailer";
-import type { AuthProvider, Identity } from "./provider";
+import type { AuthProvider } from "./provider";
+import { sessionLifetimeSeconds } from "./sessionStorage";
+import { createSessions, sessionCookieName } from "./sessions";
 
 export type AppDependencies = {
   db: Database["db"];
@@ -20,6 +29,7 @@ export type AppDependencies = {
   mailer: InvitationMailer;
   publicWebUrl: string;
   initialOwnerEmail?: string;
+  sessionEncryptionKey?: string;
   storage?: MediaStorage;
   maxImageBytes?: number;
   maxVideoBytes?: number;
@@ -44,36 +54,50 @@ const hashToken = async (token: string) =>
     await crypto.subtle.digest("SHA-256", new TextEncoder().encode(token)),
   ).toString("hex");
 
-const bearerIdentity = async (
-  header: string | undefined,
-  auth: AuthProvider,
-  requireVerifiedEmail = false,
-): Promise<Identity> => {
-  if (!header?.startsWith("Bearer "))
-    throw new ApiError(401, "unauthorized", "Administrator session required");
-  return auth.verify(header.slice(7), { requireVerifiedEmail });
-};
-
 /** Registers first-run, session, and administrator protection endpoints. */
 export const registerAuthRoutes = (
   app: Hono,
-  { db, auth, mailer, publicWebUrl, initialOwnerEmail }: AppDependencies,
+  {
+    db,
+    auth,
+    mailer,
+    publicWebUrl,
+    initialOwnerEmail,
+    sessionEncryptionKey,
+  }: AppDependencies,
 ) => {
+  const sessions = createSessions(db, auth, sessionEncryptionKey);
+  const origin = new URL(publicWebUrl).origin;
+  const cookieOptions = {
+    httpOnly: true,
+    secure: origin.startsWith("https:"),
+    sameSite: "Lax" as const,
+    path: "/",
+  };
+  app.use("*", async (context, next) => {
+    const path = context.req.path;
+    const protectedPath =
+      path.startsWith("/admin/") ||
+      path.startsWith("/auth/") ||
+      path === "/setup" ||
+      path === "/invitations/accept";
+    if (protectedPath) {
+      context.header("Cache-Control", "no-store");
+      if (
+        !["GET", "HEAD", "OPTIONS"].includes(context.req.method) &&
+        context.req.header("origin") !== origin
+      )
+        throw new ApiError(
+          403,
+          "forbidden",
+          "This request must come from the pixelpushr site.",
+        );
+    }
+    await next();
+  });
   app.use("/admin/*", async (context, next) => {
-    const identity = await bearerIdentity(
-      context.req.header("authorization"),
-      auth,
-    );
-    const user = await db.query.users.findFirst({
-      where: eq(users.subject, identity.subject),
-    });
-    const membership = user
-      ? await db.query.memberships.findFirst({
-          where: eq(memberships.userId, user.id),
-        })
-      : undefined;
-    if (!membership)
-      throw new ApiError(403, "forbidden", "Administrator membership required");
+    const { user } = await sessions.resolve(sessionCredential(context));
+    context.set("admin", await requireMembership(db, user));
     await next();
   });
 
@@ -119,13 +143,32 @@ export const registerAuthRoutes = (
 
   app.post("/auth/login", async (context) => {
     const body = await parseJsonBody(context, registerSchema);
-    return context.json(await auth.signIn(body.email, body.password));
+    const credential = await sessions.login(
+      body.email,
+      body.password,
+      sessionCredential(context),
+    );
+    setCookie(context, sessionCookieName, credential, {
+      ...cookieOptions,
+      maxAge: sessionLifetimeSeconds,
+    });
+    return context.json({ signedIn: true });
+  });
+
+  app.get("/auth/session", async (context) => {
+    await sessions.resolve(sessionCredential(context));
+    return context.json({ signedIn: true });
+  });
+
+  app.post("/auth/logout", async (context) => {
+    await sessions.logout(sessionCredential(context));
+    setCookie(context, sessionCookieName, "", { ...cookieOptions, maxAge: 0 });
+    return context.json({ signedOut: true });
   });
 
   app.post("/setup", async (context) => {
-    const identity = await bearerIdentity(
-      context.req.header("authorization"),
-      auth,
+    const identity = await sessions.resolve(
+      sessionCredential(context),
       Boolean(initialOwnerEmail),
     );
     const body = await parseJsonBody(context, setupSchema);
@@ -160,17 +203,12 @@ export const registerAuthRoutes = (
           "forbidden",
           "Workspace setup requires the designated owner's verified email",
         );
-      const user = await transaction.query.users.findFirst({
-        where: eq(users.subject, identity.subject),
-      });
-      if (!user)
-        throw new ApiError(401, "unauthorized", "Registered account required");
       const organization = firstRow(
         await transaction.insert(organizations).values(body).returning(),
       );
       await transaction.insert(memberships).values({
         organizationId: organization.id,
-        userId: user.id,
+        userId: identity.user.id,
         role: "owner",
       });
       return organization;
@@ -179,20 +217,7 @@ export const registerAuthRoutes = (
   });
 
   app.get("/admin/me", async (context) => {
-    const identity = await bearerIdentity(
-      context.req.header("authorization"),
-      auth,
-    );
-    const user = await db.query.users.findFirst({
-      where: eq(users.subject, identity.subject),
-    });
-    if (!user)
-      throw new ApiError(403, "forbidden", "Administrator membership required");
-    const membership = await db.query.memberships.findFirst({
-      where: eq(memberships.userId, user.id),
-    });
-    if (!membership)
-      throw new ApiError(403, "forbidden", "Administrator membership required");
+    const { user, membership } = getAdmin(context);
     const organization = await db.query.organizations.findFirst({
       where: eq(organizations.id, membership.organizationId),
     });
@@ -204,20 +229,7 @@ export const registerAuthRoutes = (
   });
 
   app.get("/admin/members", async (context) => {
-    const identity = await bearerIdentity(
-      context.req.header("authorization"),
-      auth,
-    );
-    const user = await db.query.users.findFirst({
-      where: eq(users.subject, identity.subject),
-    });
-    const membership = user
-      ? await db.query.memberships.findFirst({
-          where: eq(memberships.userId, user.id),
-        })
-      : undefined;
-    if (!membership)
-      throw new ApiError(403, "forbidden", "Administrator membership required");
+    const { membership } = getAdmin(context);
     const rows = await db
       .select({
         id: users.id,
@@ -233,20 +245,7 @@ export const registerAuthRoutes = (
   });
 
   app.patch("/admin/organization", async (context) => {
-    const identity = await bearerIdentity(
-      context.req.header("authorization"),
-      auth,
-    );
-    const user = await db.query.users.findFirst({
-      where: eq(users.subject, identity.subject),
-    });
-    const membership = user
-      ? await db.query.memberships.findFirst({
-          where: eq(memberships.userId, user.id),
-        })
-      : undefined;
-    if (membership?.role !== "owner")
-      throw new ApiError(403, "forbidden", "Owner access required");
+    const membership = getOwner(context);
     const body = await parseJsonBody(context, setupSchema);
     try {
       new Intl.DateTimeFormat("en", { timeZone: body.timezone });
@@ -268,27 +267,11 @@ export const registerAuthRoutes = (
     return context.json({ organization });
   });
 
-  const requireInvitationOwner = async (authorization: string | undefined) => {
-    const identity = await bearerIdentity(authorization, auth);
-    const user = await db.query.users.findFirst({
-      where: eq(users.subject, identity.subject),
-    });
-    const membership = user
-      ? await db.query.memberships.findFirst({
-          where: eq(memberships.userId, user.id),
-        })
-      : undefined;
-    if (membership?.role !== "owner")
-      throw new ApiError(403, "forbidden", "Owner access required");
-    return membership;
-  };
   const invitationUrl = (token: string) =>
     `${publicWebUrl.replace(/\/$/, "")}/invite/${token}`;
 
   app.get("/admin/invitations", async (context) => {
-    const membership = await requireInvitationOwner(
-      context.req.header("authorization"),
-    );
+    const membership = getOwner(context);
     const records = await db.query.invitations.findMany({
       where: eq(invitations.organizationId, membership.organizationId),
     });
@@ -304,9 +287,7 @@ export const registerAuthRoutes = (
   });
 
   app.post("/admin/invitations", async (context) => {
-    const membership = await requireInvitationOwner(
-      context.req.header("authorization"),
-    );
+    const membership = getOwner(context);
     const { email } = await parseJsonBody(context, inviteSchema);
     const existingUser = await db.query.users.findFirst({
       where: eq(users.email, email),
@@ -369,9 +350,7 @@ export const registerAuthRoutes = (
   });
 
   app.delete("/admin/invitations/:id", async (context) => {
-    const membership = await requireInvitationOwner(
-      context.req.header("authorization"),
-    );
+    const membership = getOwner(context);
     const id = z.uuid().safeParse(context.req.param("id"));
     if (!id.success)
       throw new ApiError(400, "invalid_request", "Invalid invitation ID");
@@ -392,9 +371,7 @@ export const registerAuthRoutes = (
   });
 
   app.post("/admin/invitations/email", async (context) => {
-    const membership = await requireInvitationOwner(
-      context.req.header("authorization"),
-    );
+    const membership = getOwner(context);
     const { token } = await parseJsonBody(context, acceptSchema);
     const invitation = await db.query.invitations.findFirst({
       where: and(
@@ -421,10 +398,7 @@ export const registerAuthRoutes = (
   });
 
   app.post("/invitations/accept", async (context) => {
-    const identity = await bearerIdentity(
-      context.req.header("authorization"),
-      auth,
-    );
+    const identity = await sessions.resolve(sessionCredential(context), true);
     const { token } = await parseJsonBody(context, acceptSchema);
     const tokenHash = await hashToken(token);
     const result = await db.transaction(async (transaction) => {
@@ -443,10 +417,8 @@ export const registerAuthRoutes = (
           .where(eq(invitations.id, invitation.id));
         return "expired" as const;
       }
-      const user = await transaction.query.users.findFirst({
-        where: eq(users.subject, identity.subject),
-      });
-      if (!user || user.email !== invitation.email)
+      const { user } = identity;
+      if (!identity.email || identity.email.toLowerCase() !== invitation.email)
         return "wrong_account" as const;
       const existing = await transaction.query.memberships.findFirst({
         where: and(

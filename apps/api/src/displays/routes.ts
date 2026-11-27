@@ -8,7 +8,6 @@ import { and, asc, eq, sql } from "drizzle-orm";
 import type { Hono } from "hono";
 import { z } from "zod";
 import { getAdmin } from "../auth/guard";
-import type { AuthProvider } from "../auth/provider";
 import type { Database } from "../db/client";
 import { firstRow } from "../db/rows";
 import {
@@ -39,7 +38,6 @@ import {
 
 type DisplayDependencies = {
   db: Database["db"];
-  auth: AuthProvider;
   storage: MediaStorage;
   publicWebUrl: string;
 };
@@ -249,10 +247,10 @@ export const resolveAlwaysManifest = async (
 /** Registers administrator display management and public player endpoints. */
 export const registerDisplayRoutes = (
   app: Hono,
-  { db, auth, storage, publicWebUrl }: DisplayDependencies,
+  { db, storage, publicWebUrl }: DisplayDependencies,
 ) => {
   app.get("/admin/displays", async (context) => {
-    const { membership } = await getAdmin(context, db, auth);
+    const { membership } = getAdmin(context);
     const pagination = parsePagination((key) => context.req.query(key));
     const base = db
       .select()
@@ -282,7 +280,7 @@ export const registerDisplayRoutes = (
   });
 
   app.post("/admin/displays", async (context) => {
-    const { membership } = await getAdmin(context, db, auth);
+    const { membership } = getAdmin(context);
     const body = await parseJsonBody(context, displaySchema);
     const token = Buffer.from(
       crypto.getRandomValues(new Uint8Array(32)),
@@ -309,7 +307,7 @@ export const registerDisplayRoutes = (
   });
 
   app.patch("/admin/displays/:id", async (context) => {
-    const { membership } = await getAdmin(context, db, auth);
+    const { membership } = getAdmin(context);
     const body = await parseJsonBody(context, displaySchema);
     const row = (
       await db
@@ -334,7 +332,7 @@ export const registerDisplayRoutes = (
   });
 
   app.get("/admin/displays/:id/assignments", async (context) => {
-    const { membership } = await getAdmin(context, db, auth);
+    const { membership } = getAdmin(context);
     const display = await db.query.displays.findFirst({
       where: and(
         eq(displays.organizationId, membership.organizationId),
@@ -370,7 +368,7 @@ export const registerDisplayRoutes = (
   app.patch(
     "/admin/displays/:id/assignments/:assignmentId",
     async (context) => {
-      const { membership } = await getAdmin(context, db, auth);
+      const { membership } = getAdmin(context);
       const body = await parseJsonBody(context, editAssignmentSchema);
       const display = await db.query.displays.findFirst({
         where: and(
@@ -512,7 +510,7 @@ export const registerDisplayRoutes = (
   );
 
   app.post("/admin/displays/:id/schedules", async (context) => {
-    const { membership } = await getAdmin(context, db, auth);
+    const { membership } = getAdmin(context);
     const body = await parseJsonBody(context, scheduledSchema);
     const display = await db.query.displays.findFirst({
       where: and(
@@ -576,7 +574,7 @@ export const registerDisplayRoutes = (
   });
 
   app.delete("/admin/displays/:id/schedules/:assignmentId", async (context) => {
-    const { membership } = await getAdmin(context, db, auth);
+    const { membership } = getAdmin(context);
     const display = await db.query.displays.findFirst({
       where: and(
         eq(displays.organizationId, membership.organizationId),
@@ -606,7 +604,7 @@ export const registerDisplayRoutes = (
   });
 
   app.post("/admin/displays/:id/overrides", async (context) => {
-    const { membership } = await getAdmin(context, db, auth);
+    const { membership } = getAdmin(context);
     const body = await parseJsonBody(context, overrideSchema);
     const display = await db.query.displays.findFirst({
       where: and(
@@ -688,7 +686,7 @@ export const registerDisplayRoutes = (
   });
 
   app.delete("/admin/displays/:id/overrides/:assignmentId", async (context) => {
-    const { membership } = await getAdmin(context, db, auth);
+    const { membership } = getAdmin(context);
     const display = await db.query.displays.findFirst({
       where: and(
         eq(displays.organizationId, membership.organizationId),
@@ -717,7 +715,7 @@ export const registerDisplayRoutes = (
   });
 
   app.get("/admin/displays/:id/preview", async (context) => {
-    const { membership } = await getAdmin(context, db, auth);
+    const { membership } = getAdmin(context);
     const display = await db.query.displays.findFirst({
       where: and(
         eq(displays.organizationId, membership.organizationId),
@@ -747,7 +745,7 @@ export const registerDisplayRoutes = (
   });
 
   app.put("/admin/displays/:id/always", async (context) => {
-    const { membership } = await getAdmin(context, db, auth);
+    const { membership } = getAdmin(context);
     const body = await parseJsonBody(context, alwaysSchema);
     const display = await db.query.displays.findFirst({
       where: and(

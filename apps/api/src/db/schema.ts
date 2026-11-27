@@ -63,6 +63,19 @@ export const users = pgTable(
   (table) => [uniqueIndex("users_email_lower_unique").on(table.email)],
 );
 
+export const adminSessions = pgTable(
+  "admin_sessions",
+  {
+    digest: varchar("digest", { length: 64 }).primaryKey(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    providerCredentials: text("provider_credentials"),
+  },
+  (table) => [index("admin_sessions_expiry_idx").on(table.expiresAt)],
+);
+
 export const memberships = pgTable(
   "memberships",
   {

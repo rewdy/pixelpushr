@@ -10,8 +10,8 @@ const mockMediaApi = async (
   onUpload: (name: string) => Promise<number | undefined> = async () =>
     undefined,
 ) => {
-  await page.addInitScript(() =>
-    sessionStorage.setItem("pixelpushr-admin-session", "test-token"),
+  await page.route("**/api/admin/**", (route) =>
+    route.fulfill({ status: 404 }),
   );
   await page.route("**/api/admin/me", (route) =>
     route.fulfill({
@@ -135,6 +135,9 @@ test("page-wide file drop queues media without navigating, while text drags are 
 }) => {
   await mockMediaApi(page);
   await page.goto("/media");
+  await expect(
+    page.getByRole("heading", { name: "Media library" }),
+  ).toBeVisible();
   await page.evaluate(() => {
     const data = new DataTransfer();
     data.setData("text/plain", "not a file");

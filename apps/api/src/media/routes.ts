@@ -2,7 +2,6 @@ import { and, asc, eq, ilike, inArray, isNull, sql } from "drizzle-orm";
 import type { Hono } from "hono";
 import { z } from "zod";
 import { getAdmin } from "../auth/guard";
-import type { AuthProvider } from "../auth/provider";
 import type { Database } from "../db/client";
 import { firstRow } from "../db/rows";
 import {
@@ -30,7 +29,6 @@ import { matchesSignature, supportedMedia } from "./validation";
 
 export type MediaDependencies = {
   db: Database["db"];
-  auth: AuthProvider;
   storage: MediaStorage;
   maxImageBytes: number;
   maxVideoBytes: number;
@@ -139,7 +137,7 @@ const serializeAsset = (
 /** Registers tenant-scoped media upload, readiness, listing, and removal APIs. */
 export const registerMediaRoutes = (
   app: Hono,
-  { db, auth, storage, maxImageBytes, maxVideoBytes }: MediaDependencies,
+  { db, storage, maxImageBytes, maxVideoBytes }: MediaDependencies,
 ) => {
   const tagsFor = async (assetId: string) =>
     db
@@ -148,7 +146,7 @@ export const registerMediaRoutes = (
       .innerJoin(mediaTags, eq(mediaAssetTags.tagId, mediaTags.id))
       .where(eq(mediaAssetTags.mediaAssetId, assetId));
   app.get("/admin/media", async (context) => {
-    const { membership } = await getAdmin(context, db, auth);
+    const { membership } = getAdmin(context);
     const pagination = parsePagination((key) => context.req.query(key));
     const search =
       context.req.query("search")?.trim().toLocaleLowerCase() ?? "";
@@ -230,7 +228,7 @@ export const registerMediaRoutes = (
   });
 
   app.get("/admin/media/tags", async (context) => {
-    const { membership } = await getAdmin(context, db, auth);
+    const { membership } = getAdmin(context);
     const tags = await db
       .select({ id: mediaTags.id, name: mediaTags.name })
       .from(mediaTags)
@@ -241,7 +239,7 @@ export const registerMediaRoutes = (
   });
 
   app.post("/admin/media/bulk/tags", async (context) => {
-    const { membership } = await getAdmin(context, db, auth);
+    const { membership } = getAdmin(context);
     const body = await parseJsonBody(context, bulkTagsSchema);
     const ids = [...body.assetIds].sort();
     const names = [
@@ -322,7 +320,7 @@ export const registerMediaRoutes = (
   });
 
   app.post("/admin/media/bulk/delete-impact", async (context) => {
-    const { membership } = await getAdmin(context, db, auth);
+    const { membership } = getAdmin(context);
     const { assetIds } = await parseJsonBody(context, bulkImpactSchema);
     const impact = await db.transaction(async (transaction) => {
       await transaction.execute(
@@ -355,7 +353,7 @@ export const registerMediaRoutes = (
   });
 
   app.post("/admin/media/bulk/delete", async (context) => {
-    const { membership } = await getAdmin(context, db, auth);
+    const { membership } = getAdmin(context);
     const { assetIds, snapshotToken } = await parseJsonBody(
       context,
       bulkDeleteSchema,
@@ -425,7 +423,7 @@ export const registerMediaRoutes = (
   });
 
   app.post("/admin/media/uploads", async (context) => {
-    const { membership } = await getAdmin(context, db, auth);
+    const { membership } = getAdmin(context);
     const body = await parseJsonBody(context, uploadSchema);
     const kind = supportedMedia[body.mimeType as keyof typeof supportedMedia];
     const id = crypto.randomUUID();
@@ -479,7 +477,7 @@ export const registerMediaRoutes = (
   });
 
   app.post("/admin/media/:id/complete", async (context) => {
-    const { membership } = await getAdmin(context, db, auth);
+    const { membership } = getAdmin(context);
     const asset = await db.query.mediaAssets.findFirst({
       where: and(
         eq(mediaAssets.organizationId, membership.organizationId),
@@ -513,7 +511,7 @@ export const registerMediaRoutes = (
   });
 
   app.post("/admin/media/:id/replacements", async (context) => {
-    const { membership } = await getAdmin(context, db, auth);
+    const { membership } = getAdmin(context);
     const body = await parseJsonBody(context, replacementSchema);
     const asset = await db.query.mediaAssets.findFirst({
       where: and(
@@ -571,7 +569,7 @@ export const registerMediaRoutes = (
   app.post(
     "/admin/media/:id/replacements/:replacementId/complete",
     async (context) => {
-      const { membership } = await getAdmin(context, db, auth);
+      const { membership } = getAdmin(context);
       const preview = await parseJsonBody(context, completeSchema);
       const asset = await db.query.mediaAssets.findFirst({
         where: and(
@@ -742,7 +740,7 @@ export const registerMediaRoutes = (
   );
 
   app.patch("/admin/media/:id", async (context) => {
-    const { membership } = await getAdmin(context, db, auth);
+    const { membership } = getAdmin(context);
     const body = await parseJsonBody(context, renameSchema);
     const updated = (
       await db
@@ -763,7 +761,7 @@ export const registerMediaRoutes = (
   });
 
   app.put("/admin/media/:id/tags", async (context) => {
-    const { membership } = await getAdmin(context, db, auth);
+    const { membership } = getAdmin(context);
     const body = await parseJsonBody(context, tagsSchema);
     const normalized = [
       ...new Map(
@@ -815,7 +813,7 @@ export const registerMediaRoutes = (
   });
 
   app.get("/admin/media/:id/delete-impact", async (context) => {
-    const { membership } = await getAdmin(context, db, auth);
+    const { membership } = getAdmin(context);
     const asset = await db.query.mediaAssets.findFirst({
       where: and(
         eq(mediaAssets.organizationId, membership.organizationId),
@@ -836,7 +834,7 @@ export const registerMediaRoutes = (
   });
 
   app.put("/admin/media/:id/thumbnail", async (context) => {
-    const { membership } = await getAdmin(context, db, auth);
+    const { membership } = getAdmin(context);
     const asset = await db.query.mediaAssets.findFirst({
       where: and(
         eq(mediaAssets.organizationId, membership.organizationId),
@@ -909,7 +907,7 @@ export const registerMediaRoutes = (
   });
 
   app.delete("/admin/media/:id", async (context) => {
-    const { membership } = await getAdmin(context, db, auth);
+    const { membership } = getAdmin(context);
     const body = context.req
       .header("content-type")
       ?.includes("application/json")

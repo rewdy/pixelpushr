@@ -12,29 +12,37 @@ import {
 } from "@mantine/core";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
-import { Link, useLocation } from "wouter";
-import { requestJson, setToken } from "../../helpers/api";
+import { Link, Redirect, useLocation } from "wouter";
+import {
+  RequestError,
+  requestJson,
+  resetSessionState,
+} from "../../helpers/api";
+import {
+  afterSignIn,
+  authContinuation,
+  loginDestination,
+} from "../../helpers/sessionNavigation";
+import { useSignOut } from "../../hooks/useSignOut";
 import { TimezoneSelect } from "../TimezoneSelect/TimezoneSelect";
-
-type Session = { accessToken: string };
 
 /** Handles administrator sign-in without Cognito's hosted UI. */
 export const LoginScreen = () => {
   const [, navigate] = useLocation();
-  const next = new URLSearchParams(window.location.search).get("next") ?? "/";
+  const next = authContinuation();
   const queryClient = useQueryClient();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const login = useMutation({
     mutationFn: () =>
-      requestJson<Session>("/auth/login", {
+      requestJson<{ signedIn: boolean }>("/auth/login", {
         method: "POST",
         body: JSON.stringify({ email, password }),
       }),
-    onSuccess: (session) => {
-      setToken(session.accessToken);
-      void queryClient.invalidateQueries({ queryKey: ["me"] });
-      navigate(next.startsWith("/") && !next.startsWith("//") ? next : "/");
+    onSuccess: () => {
+      resetSessionState();
+      queryClient.clear();
+      navigate(afterSignIn(next), { replace: true });
     },
   });
   return (
@@ -42,6 +50,12 @@ export const LoginScreen = () => {
       <Paper withBorder p="xl">
         <Stack>
           <Title order={2}>Sign in</Title>
+          {new URLSearchParams(window.location.search).get("reason") ===
+            "session-ended" && (
+            <Alert color="yellow">
+              Your session ended. Sign in again to continue.
+            </Alert>
+          )}
           <Text c="dimmed" size="sm">
             Manage your signage from one place.
           </Text>
@@ -78,7 +92,7 @@ export const LoginScreen = () => {
 /** Creates an account using the app-owned registration screen. */
 export const RegisterScreen = () => {
   const [, navigate] = useLocation();
-  const next = new URLSearchParams(window.location.search).get("next") ?? "/";
+  const next = authContinuation();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const register = useMutation({
@@ -142,7 +156,7 @@ export const RegisterScreen = () => {
 /** Confirms a new Cognito account with the emailed code. */
 export const ConfirmScreen = () => {
   const [, navigate] = useLocation();
-  const next = new URLSearchParams(window.location.search).get("next") ?? "/";
+  const next = authContinuation();
   const [email, setEmail] = useState(
     new URLSearchParams(window.location.search).get("email") ?? "",
   );
@@ -187,6 +201,7 @@ export const ConfirmScreen = () => {
 export const SetupScreen = () => {
   const [, navigate] = useLocation();
   const queryClient = useQueryClient();
+  const signOut = useSignOut();
   const [name, setName] = useState("");
   const [timezone, setTimezone] = useState(
     Intl.DateTimeFormat().resolvedOptions().timeZone,
@@ -202,6 +217,11 @@ export const SetupScreen = () => {
       navigate("/");
     },
   });
+  if (
+    setup.error instanceof RequestError &&
+    setup.error.code === "session_required"
+  )
+    return <Redirect to={loginDestination("/setup")} replace />;
   return (
     <Container size={460} py={80}>
       <Paper withBorder p="xl">
@@ -219,6 +239,17 @@ export const SetupScreen = () => {
           />
           <TimezoneSelect value={timezone} onChange={setTimezone} required />
           {setup.error && <Alert color="red">{setup.error.message}</Alert>}
+          {setup.error instanceof RequestError &&
+            setup.error.status === 403 && (
+              <Button
+                variant="subtle"
+                loading={signOut.isPending}
+                onClick={() => signOut.mutate()}
+              >
+                Switch accounts
+              </Button>
+            )}
+          {signOut.error && <Alert color="red">{signOut.error.message}</Alert>}
           <Button
             loading={setup.isPending}
             disabled={!timezone}

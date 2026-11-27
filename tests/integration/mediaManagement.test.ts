@@ -24,6 +24,7 @@ import {
 import { cleanupMedia } from "../../apps/api/src/media/cleanup";
 import { createLocalStorage } from "../../apps/api/src/media/localStorage";
 import { testDatabaseAdminUrl } from "../config";
+import { browserRequest, loginCookie } from "../fixtures/authRequests";
 
 const png = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10, 1, 2, 3, 4]);
 const pngNext = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10, 5, 6, 7, 8]);
@@ -31,7 +32,7 @@ const databaseName = `pixelpushr_media_${crypto.randomUUID().replaceAll("-", "")
 let admin: ReturnType<typeof postgres>;
 let connection: ReturnType<typeof createDatabase>;
 let storage: ReturnType<typeof createLocalStorage>;
-let app: ReturnType<typeof createApp>;
+let request: ReturnType<typeof browserRequest>;
 let directory: string;
 let headers: Record<string, string>;
 let imageId: string;
@@ -48,14 +49,14 @@ const uploadBytes = async (
   mimeType = "image/png",
 ) => {
   const url = new URL(uploadUrl);
-  return app.request(url.pathname.replace(/^\/api/, "") + url.search, {
+  return request(url.pathname.replace(/^\/api/, "") + url.search, {
     method: "PUT",
     headers: { "content-type": mimeType },
     body: bytes,
   });
 };
 const uploadImage = async (name: string) => {
-  const started = await app.request("/admin/media/uploads", {
+  const started = await request("/admin/media/uploads", {
     method: "POST",
     headers,
     body: json({ name, mimeType: "image/png", sizeBytes: png.length }),
@@ -66,14 +67,11 @@ const uploadImage = async (name: string) => {
     uploadUrl: string;
   };
   expect((await uploadBytes(body.uploadUrl, png)).status).toBe(200);
-  const completed = await app.request(
-    `/admin/media/${body.asset.id}/complete`,
-    {
-      method: "POST",
-      headers,
-      body: json({ width: 1, height: 1 }),
-    },
-  );
+  const completed = await request(`/admin/media/${body.asset.id}/complete`, {
+    method: "POST",
+    headers,
+    body: json({ width: 1, height: 1 }),
+  });
   expect(completed.status).toBe(200);
   return body.asset.id;
 };
@@ -81,20 +79,17 @@ const createPlaylist = async (
   name: string,
   items: Array<{ mediaAssetId: string; imageDurationMs: number }>,
 ) => {
-  const created = await app.request("/admin/playlists", {
+  const created = await request("/admin/playlists", {
     method: "POST",
     headers,
     body: json({ name }),
   });
   const body = (await created.json()) as { playlist: { id: string } };
-  const saved = await app.request(
-    `/admin/playlists/${body.playlist.id}/items`,
-    {
-      method: "PUT",
-      headers,
-      body: json({ items }),
-    },
-  );
+  const saved = await request(`/admin/playlists/${body.playlist.id}/items`, {
+    method: "PUT",
+    headers,
+    body: json({ items }),
+  });
   expect(saved.status).toBe(200);
   return body.playlist.id;
 };
@@ -116,19 +111,21 @@ describe("media management", () => {
       "http://127.0.0.1:5173",
       "test-secret-longer-than-thirty-two-characters",
     );
-    app = createApp({
-      db: connection.db,
-      auth: createLocalAuth(
-        connection.db,
-        "test-secret-longer-than-thirty-two-characters",
-      ),
-      storage,
-      mailer: { send: async () => {} },
-      publicWebUrl: "http://127.0.0.1:5173",
-    });
+    request = browserRequest(
+      createApp({
+        db: connection.db,
+        auth: createLocalAuth(
+          connection.db,
+          "test-secret-longer-than-thirty-two-characters",
+        ),
+        storage,
+        mailer: { send: async () => {} },
+        publicWebUrl: "http://127.0.0.1:5173",
+      }),
+    );
     expect(
       (
-        await app.request("/auth/register", {
+        await request("/auth/register", {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: json({
@@ -138,7 +135,7 @@ describe("media management", () => {
         })
       ).status,
     ).toBe(201);
-    const login = await app.request("/auth/login", {
+    const login = await request("/auth/login", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: json({
@@ -146,14 +143,14 @@ describe("media management", () => {
         password: "super-long-password",
       }),
     });
-    const token = ((await login.json()) as { accessToken: string }).accessToken;
+    const token = loginCookie(login);
     headers = {
-      authorization: `Bearer ${token}`,
+      cookie: token,
       "content-type": "application/json",
     };
     expect(
       (
-        await app.request("/setup", {
+        await request("/setup", {
           method: "POST",
           headers,
           body: json({ name: "Media management", timezone: "UTC" }),
@@ -174,7 +171,7 @@ describe("media management", () => {
   test("tags reuse labels case-insensitively and filters combine OR tags with name search", async () => {
     const otherId = await uploadImage("Campaign image");
     const put = (id: string, tags: string[]) =>
-      app.request(`/admin/media/${id}/tags`, {
+      request(`/admin/media/${id}/tags`, {
         method: "PUT",
         headers,
         body: json({ tags }),
@@ -182,7 +179,7 @@ describe("media management", () => {
     expect((await put(imageId, ["Events", "Weekly"])).status).toBe(200);
     expect((await put(otherId, ["events"])).status).toBe(200);
     const tags = (await (
-      await app.request("/admin/media/tags", { headers })
+      await request("/admin/media/tags", { headers })
     ).json()) as {
       tags: Array<{ id: string; name: string }>;
     };
@@ -212,20 +209,20 @@ describe("media management", () => {
     if (!foreignAsset) throw new Error("Missing foreign asset");
     expect(
       (
-        await app.request(`/admin/media/${foreignAsset.id}/delete-impact`, {
+        await request(`/admin/media/${foreignAsset.id}/delete-impact`, {
           headers,
         })
       ).status,
     ).toBe(404);
     const scopedTags = (await (
-      await app.request("/admin/media/tags", { headers })
+      await request("/admin/media/tags", { headers })
     ).json()) as { tags: Array<{ name: string }> };
     expect(scopedTags.tags.map((tag) => tag.name)).not.toContain("Private tag");
     const eventId = tags.tags.find((tag) => tag.name === "Events")?.id;
     const weeklyId = tags.tags.find((tag) => tag.name === "Weekly")?.id;
     expect(eventId).toBeTruthy();
     expect(weeklyId).toBeTruthy();
-    const filtered = await app.request(
+    const filtered = await request(
       `/admin/media?search=Original&tags=${eventId},${weeklyId}`,
       { headers },
     );
@@ -234,14 +231,14 @@ describe("media management", () => {
         (asset) => asset.id,
       ),
     ).toEqual([imageId]);
-    const eventsOnly = await app.request(`/admin/media?tags=${eventId}`, {
+    const eventsOnly = await request(`/admin/media?tags=${eventId}`, {
       headers,
     });
     expect(
       ((await eventsOnly.json()) as { assets: Array<{ id: string }> }).assets,
     ).toHaveLength(2);
     expect((await put(otherId, [])).status).toBe(200);
-    const afterRemoval = await app.request(`/admin/media?tags=${weeklyId}`, {
+    const afterRemoval = await request(`/admin/media?tags=${weeklyId}`, {
       headers,
     });
     expect(
@@ -256,7 +253,7 @@ describe("media management", () => {
       { mediaAssetId: imageId, imageDurationMs: 8000 },
       { mediaAssetId: imageId, imageDurationMs: 3000 },
     ]);
-    const createdDisplay = await app.request("/admin/displays", {
+    const createdDisplay = await request("/admin/displays", {
       method: "POST",
       headers,
       body: json({ name: "Media test display" }),
@@ -269,7 +266,7 @@ describe("media management", () => {
     displayToken = display.display.playerUrl.split("/").at(-1) ?? "";
     expect(
       (
-        await app.request(`/admin/displays/${display.display.id}/always`, {
+        await request(`/admin/displays/${display.display.id}/always`, {
           method: "PUT",
           headers,
           body: json({ playlistIds: [firstPlaylistId] }),
@@ -277,7 +274,7 @@ describe("media management", () => {
       ).status,
     ).toBe(200);
     const initialManifest = (await (
-      await app.request(`/player/${displayToken}/manifest`)
+      await request(`/player/${displayToken}/manifest`)
     ).json()) as {
       version: string;
       normalQueue: Array<{ id: string; url: string; assetId: string }>;
@@ -292,24 +289,18 @@ describe("media management", () => {
       .select()
       .from(playlistItems)
       .where(eq(playlistItems.playlistId, firstPlaylistId));
-    const wrongKind = await app.request(
-      `/admin/media/${imageId}/replacements`,
-      {
-        method: "POST",
-        headers,
-        body: json({ mimeType: "video/mp4", sizeBytes: 16 }),
-      },
-    );
+    const wrongKind = await request(`/admin/media/${imageId}/replacements`, {
+      method: "POST",
+      headers,
+      body: json({ mimeType: "video/mp4", sizeBytes: 16 }),
+    });
     expect(wrongKind.status).toBe(400);
     const start = async () => {
-      const response = await app.request(
-        `/admin/media/${imageId}/replacements`,
-        {
-          method: "POST",
-          headers,
-          body: json({ mimeType: "image/png", sizeBytes: pngNext.length }),
-        },
-      );
+      const response = await request(`/admin/media/${imageId}/replacements`, {
+        method: "POST",
+        headers,
+        body: json({ mimeType: "image/png", sizeBytes: pngNext.length }),
+      });
       expect(response.status).toBe(201);
       return response.json() as Promise<{
         replacementId: string;
@@ -319,7 +310,7 @@ describe("media management", () => {
     const missing = await start();
     expect(
       (
-        await app.request(
+        await request(
           `/admin/media/${imageId}/replacements/${missing.replacementId}/complete`,
           {
             method: "POST",
@@ -334,7 +325,7 @@ describe("media management", () => {
     expect((await uploadBytes(invalid.uploadUrl, badBytes)).status).toBe(200);
     expect(
       (
-        await app.request(
+        await request(
           `/admin/media/${imageId}/replacements/${invalid.replacementId}/complete`,
           {
             method: "POST",
@@ -356,7 +347,7 @@ describe("media management", () => {
     const completeUrl = `/admin/media/${imageId}/replacements/${valid.replacementId}/complete`;
     const completions = await Promise.all(
       [0, 1].map(() =>
-        app.request(completeUrl, {
+        request(completeUrl, {
           method: "POST",
           headers,
           body: json({ width: 2, height: 2 }),
@@ -400,7 +391,7 @@ describe("media management", () => {
         .where(eq(retiredMediaObjects.objectKey, after.objectKey)),
     ).toHaveLength(0);
     const newManifest = (await (
-      await app.request(`/player/${displayToken}/manifest`)
+      await request(`/player/${displayToken}/manifest`)
     ).json()) as {
       version: string;
       normalQueue: Array<{ id: string; url: string; assetId: string }>;
@@ -415,12 +406,12 @@ describe("media management", () => {
     expect(JSON.stringify(newManifest)).not.toContain('"tags"');
     expect(
       (
-        await app.request(
+        await request(
           new URL(originalManifestUrl).pathname.replace(/^\/api/, ""),
         )
       ).status,
     ).toBe(200);
-    const list = await app.request("/admin/media", { headers });
+    const list = await request("/admin/media", { headers });
     const listed = (
       (await list.json()) as {
         assets: Array<{ id: string; tags: Array<{ name: string }> }>;
@@ -452,7 +443,7 @@ describe("media management", () => {
       where: eq(mediaAssets.id, imageId),
     });
     if (!before) throw new Error("Missing original image");
-    const started = await app.request(`/admin/media/${imageId}/replacements`, {
+    const started = await request(`/admin/media/${imageId}/replacements`, {
       method: "POST",
       headers,
       body: json({ mimeType: "image/png", sizeBytes: pngNext.length }),
@@ -475,7 +466,7 @@ describe("media management", () => {
       );
     };
     try {
-      const response = await app.request(
+      const response = await request(
         `/admin/media/${imageId}/replacements/${candidate.replacementId}/complete`,
         { method: "POST", headers, body: json({ width: 1, height: 1 }) },
       );
@@ -503,7 +494,7 @@ describe("media management", () => {
     const mp4 = new Uint8Array([
       0, 0, 0, 16, 102, 116, 121, 112, 105, 115, 111, 109, 0, 0, 0, 0,
     ]);
-    const started = await app.request("/admin/media/uploads", {
+    const started = await request("/admin/media/uploads", {
       method: "POST",
       headers,
       body: json({
@@ -519,35 +510,29 @@ describe("media management", () => {
     expect(
       (await uploadBytes(initial.uploadUrl, mp4, "video/mp4")).status,
     ).toBe(200);
-    const ready = await app.request(
-      `/admin/media/${initial.asset.id}/complete`,
-      {
-        method: "POST",
-        headers,
-        body: json({ durationMs: 5000 }),
-      },
-    );
+    const ready = await request(`/admin/media/${initial.asset.id}/complete`, {
+      method: "POST",
+      headers,
+      body: json({ durationMs: 5000 }),
+    });
     const readyAsset = (await ready.json()) as {
       asset: { contentVersion: string };
     };
     const jpeg = new Uint8Array([255, 216, 255, 224, 0, 1, 255, 217]);
-    const poster = await app.request(
-      `/admin/media/${initial.asset.id}/thumbnail`,
-      {
-        method: "PUT",
-        headers: {
-          ...headers,
-          "content-type": "image/jpeg",
-          "x-media-version": readyAsset.asset.contentVersion,
-        },
-        body: jpeg,
+    const poster = await request(`/admin/media/${initial.asset.id}/thumbnail`, {
+      method: "PUT",
+      headers: {
+        ...headers,
+        "content-type": "image/jpeg",
+        "x-media-version": readyAsset.asset.contentVersion,
       },
-    );
+      body: jpeg,
+    });
     expect(poster.status).toBe(200);
     const oldPoster = (
       (await poster.json()) as { asset: { thumbnailKey: string } }
     ).asset.thumbnailKey;
-    const playlist = await app.request("/admin/playlists", {
+    const playlist = await request("/admin/playlists", {
       method: "POST",
       headers,
       body: json({ name: "Video playlist" }),
@@ -556,7 +541,7 @@ describe("media management", () => {
       .playlist.id;
     expect(
       (
-        await app.request(`/admin/playlists/${playlistId}/items`, {
+        await request(`/admin/playlists/${playlistId}/items`, {
           method: "PUT",
           headers,
           body: json({
@@ -571,7 +556,7 @@ describe("media management", () => {
         })
       ).status,
     ).toBe(200);
-    const replacement = await app.request(
+    const replacement = await request(
       `/admin/media/${initial.asset.id}/replacements`,
       {
         method: "POST",
@@ -586,7 +571,7 @@ describe("media management", () => {
     expect(
       (await uploadBytes(replacementBody.uploadUrl, mp4, "video/mp4")).status,
     ).toBe(200);
-    const completed = await app.request(
+    const completed = await request(
       `/admin/media/${initial.asset.id}/replacements/${replacementBody.replacementId}/complete`,
       {
         method: "POST",
@@ -603,7 +588,7 @@ describe("media management", () => {
     expect(await storage.head(oldPoster)).not.toBeNull();
     expect(
       (
-        await app.request(`/admin/media/${initial.asset.id}/thumbnail`, {
+        await request(`/admin/media/${initial.asset.id}/thumbnail`, {
           method: "PUT",
           headers: {
             ...headers,
@@ -614,7 +599,7 @@ describe("media management", () => {
         })
       ).status,
     ).toBe(409);
-    const detail = await app.request(`/admin/playlists/${playlistId}`, {
+    const detail = await request(`/admin/playlists/${playlistId}`, {
       headers,
     });
     const items = (await detail.json()) as {
@@ -633,7 +618,7 @@ describe("media management", () => {
       { mediaAssetId: imageId, imageDurationMs: 4000 },
       { mediaAssetId: otherId, imageDurationMs: 5000 },
     ]);
-    const impactResponse = await app.request(
+    const impactResponse = await request(
       `/admin/media/${imageId}/delete-impact`,
       { headers },
     );
@@ -645,7 +630,7 @@ describe("media management", () => {
     );
     expect(
       (
-        await app.request(`/admin/media/${imageId}`, {
+        await request(`/admin/media/${imageId}`, {
           method: "DELETE",
           headers,
           body: json({ snapshotToken: "0".repeat(64) }),
@@ -654,7 +639,7 @@ describe("media management", () => {
     ).toBe(409);
     expect(
       (
-        await app.request(`/admin/media/${imageId}`, {
+        await request(`/admin/media/${imageId}`, {
           method: "DELETE",
           headers,
           body: json({ snapshotToken: impact.snapshotToken }),
@@ -691,14 +676,14 @@ describe("media management", () => {
       }),
     ).toBeUndefined();
     const afterDeletion = (await (
-      await app.request(`/player/${displayToken}/manifest`)
+      await request(`/player/${displayToken}/manifest`)
     ).json()) as {
       normalQueue: Array<{ assetId: string }>;
     };
     expect(afterDeletion.normalQueue).toHaveLength(0);
     expect(
       (
-        await app.request(
+        await request(
           new URL(replacementManifestUrl).pathname.replace(/^\/api/, ""),
         )
       ).status,
@@ -711,12 +696,12 @@ describe("media management", () => {
       { mediaAssetId: racingAssetId, imageDurationMs: 3000 },
     ]);
     const impact = (await (
-      await app.request(`/admin/media/${racingAssetId}/delete-impact`, {
+      await request(`/admin/media/${racingAssetId}/delete-impact`, {
         headers,
       })
     ).json()) as MediaDeleteImpact;
     const [save, deletion] = await Promise.all([
-      app.request(`/admin/playlists/${racingPlaylistId}/items`, {
+      request(`/admin/playlists/${racingPlaylistId}/items`, {
         method: "PUT",
         headers,
         body: json({
@@ -726,7 +711,7 @@ describe("media management", () => {
           ],
         }),
       }),
-      app.request(`/admin/media/${racingAssetId}`, {
+      request(`/admin/media/${racingAssetId}`, {
         method: "DELETE",
         headers,
         body: json({ snapshotToken: impact.snapshotToken }),
@@ -753,7 +738,7 @@ describe("media management", () => {
     const first = await uploadImage("Bulk tag first");
     const second = await uploadImage("Bulk tag second");
     const put = (id: string, tags: string[]) =>
-      app.request(`/admin/media/${id}/tags`, {
+      request(`/admin/media/${id}/tags`, {
         method: "PUT",
         headers,
         body: json({ tags }),
@@ -761,7 +746,7 @@ describe("media management", () => {
     expect((await put(first, ["First"])).status).toBe(200);
     expect((await put(second, ["Second"])).status).toBe(200);
     const add = (assetIds: string[], tags: string[]) =>
-      app.request("/admin/media/bulk/tags", {
+      request("/admin/media/bulk/tags", {
         method: "POST",
         headers,
         body: json({ assetIds, tags }),
@@ -769,7 +754,7 @@ describe("media management", () => {
     expect((await add([first, second], ["Shared", "shared"])).status).toBe(200);
     const listed = async () =>
       (
-        (await (await app.request("/admin/media", { headers })).json()) as {
+        (await (await request("/admin/media", { headers })).json()) as {
           assets: Array<{ id: string; tags: Array<{ name: string }> }>;
         }
       ).assets;
@@ -826,7 +811,7 @@ describe("media management", () => {
     expect((await add([first, foreign.id], ["Private"])).status).toBe(404);
     expect(
       (
-        await app.request("/admin/media/bulk/delete-impact", {
+        await request("/admin/media/bulk/delete-impact", {
           method: "POST",
           headers,
           body: json({ assetIds: [first, foreign.id] }),
@@ -855,7 +840,7 @@ describe("media management", () => {
       { mediaAssetId: used, imageDurationMs: 5000 },
     ]);
     const impact = async () => {
-      const response = await app.request("/admin/media/bulk/delete-impact", {
+      const response = await request("/admin/media/bulk/delete-impact", {
         method: "POST",
         headers,
         body: json({ assetIds: [unused, used] }),
@@ -869,7 +854,7 @@ describe("media management", () => {
       0, 2,
     ]);
     const remove = (assetIds: string[], snapshotToken: string) =>
-      app.request("/admin/media/bulk/delete", {
+      request("/admin/media/bulk/delete", {
         method: "POST",
         headers,
         body: json({ assetIds, snapshotToken }),
@@ -891,7 +876,7 @@ describe("media management", () => {
       .from(mediaAssets)
       .where(eq(mediaAssets.id, used));
     expect(beforeChange).toHaveLength(1);
-    const changed = await app.request(`/admin/playlists/${playlistId}/items`, {
+    const changed = await request(`/admin/playlists/${playlistId}/items`, {
       method: "PUT",
       headers,
       body: json({
@@ -955,7 +940,7 @@ describe("media management", () => {
       if (!key) throw new Error("Missing retired media key");
       const mediaUrl = new URL(storage.publicUrl(key));
       expect(
-        (await app.request(mediaUrl.pathname.replace(/^\/api/, ""))).status,
+        (await request(mediaUrl.pathname.replace(/^\/api/, ""))).status,
       ).toBe(200);
     }
   });
@@ -969,7 +954,7 @@ describe("media management", () => {
       where: eq(mediaAssets.kind, "image"),
     });
     if (!live) throw new Error("Missing live asset");
-    const pending = await app.request(`/admin/media/${live.id}/replacements`, {
+    const pending = await request(`/admin/media/${live.id}/replacements`, {
       method: "POST",
       headers,
       body: json({ mimeType: live.mimeType, sizeBytes: png.length }),

@@ -6,8 +6,8 @@ const expectTitle = async (page: Page, name: string) => {
 };
 
 const mockAdmin = async (page: Page) => {
-  await page.addInitScript(() =>
-    sessionStorage.setItem("pixelpushr-admin-session", "test-token"),
+  await page.route("**/api/admin/**", (route) =>
+    route.fulfill({ status: 404 }),
   );
   await page.route("**/api/admin/me", (route) =>
     route.fulfill({
@@ -63,16 +63,21 @@ test("in-app admin navigation replaces the title without duplicates", async ({
 test("admin gate loading and denial states each own a title", async ({
   page,
 }) => {
-  await page.addInitScript(() =>
-    sessionStorage.setItem("pixelpushr-admin-session", "test-token"),
-  );
   let releaseMe: (() => void) | undefined;
   const meGate = new Promise<void>((resolve) => {
     releaseMe = resolve;
   });
   await page.route("**/api/admin/me", async (route) => {
     await meGate;
-    await route.fulfill({ status: 403, json: { error: "forbidden" } });
+    await route.fulfill({
+      status: 403,
+      json: {
+        error: {
+          code: "membership_required",
+          message: "Administrator membership required",
+        },
+      },
+    });
   });
   await page.route("**/api/setup/status", (route) =>
     route.fulfill({ json: { setupRequired: false } }),

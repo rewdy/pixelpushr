@@ -3,6 +3,10 @@ import { z } from "zod";
 const schema = z
   .object({
     APP_ENV: z.enum(["local", "production"]).default("local"),
+    SESSION_ENCRYPTION_KEY: z
+      .string()
+      .regex(/^[0-9a-f]{64}$/i, "Expected a 32-byte hex key")
+      .optional(),
     AUTH_MODE: z.enum(["local", "cognito"]).default("local"),
     DATABASE_URL: z.url(),
     INITIAL_OWNER_EMAIL: z.email().toLowerCase().optional(),
@@ -25,11 +29,26 @@ const schema = z
     PORT: z.coerce.number().int().min(1).max(65535).default(3000),
   })
   .superRefine((value, context) => {
+    if (value.AUTH_MODE === "cognito" && !value.SESSION_ENCRYPTION_KEY)
+      context.addIssue({
+        code: "custom",
+        path: ["SESSION_ENCRYPTION_KEY"],
+        message: "Cognito sessions require an encryption key",
+      });
     if (value.APP_ENV === "production" && !value.INITIAL_OWNER_EMAIL)
       context.addIssue({
         code: "custom",
         path: ["INITIAL_OWNER_EMAIL"],
         message: "Production requires an initial owner email",
+      });
+    if (
+      value.APP_ENV === "production" &&
+      !value.PUBLIC_WEB_URL.startsWith("https://")
+    )
+      context.addIssue({
+        code: "custom",
+        path: ["PUBLIC_WEB_URL"],
+        message: "Production sessions require an HTTPS web origin",
       });
     if (value.APP_ENV === "production" && value.AUTH_MODE !== "cognito")
       context.addIssue({
